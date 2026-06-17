@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Sonno · Garmin Connector{% endblock %}
+{% block heading %}Sonno{% endblock %}
+
+{% block content %}
+<section class="grid-2">
+  <div class="card span-2">
+    <h2>Fasi del sonno · ultimi 28 giorni (ore)</h2>
+    <div class="chart-box tall"><canvas id="stagesChart"></canvas></div>
+  </div>
+  <div class="card span-2">
+    <h2>Sleep score</h2>
+    <div class="chart-box"><canvas id="scoreChart"></canvas></div>
+  </div>
+</section>
+
+<div class="card mt">
+  <h2>Dettaglio notti</h2>
+  {% if rows %}
+  <table>
+    <thead><tr><th>Giorno</th><th>Totale</th><th>Profondo</th><th>Leggero</th><th>REM</th><th>Sveglio</th><th>Score</th><th>FC riposo</th><th>SpO₂</th></tr></thead>
+    <tbody>
+      {% for s in rows %}
+      <tr>
+        <td>{{ s.day.strftime('%d/%m') }}</td>
+        <td>{{ s.total_sleep_sec | duration }}</td>
+        <td>{{ s.deep_sleep_sec | duration }}</td>
+        <td>{{ s.light_sleep_sec | duration }}</td>
+        <td>{{ s.rem_sleep_sec | duration }}</td>
+        <td>{{ s.awake_sec | duration }}</td>
+        <td>{{ s.sleep_score | num }}</td>
+        <td>{{ s.resting_hr | num }}</td>
+        <td>{{ s.avg_spo2 | num }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">Nessun dato sul sonno. Premi <b>Sincronizza</b>.</p>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const C = {{ chart | tojson }};
+  GC.barChart("stagesChart", C.labels, [
+    { label: "Profondo", data: C.deep, color: GC.PALETTE.blue },
+    { label: "Leggero", data: C.light, color: GC.PALETTE.cyan },
+    { label: "REM", data: C.rem, color: GC.PALETTE.purple },
+    { label: "Sveglio", data: C.awake, color: GC.PALETTE.amber },
+  ], true);
+  GC.lineChart("scoreChart", C.labels, [{ label: "Sleep score", data: C.score, color: GC.PALETTE.purple, fill: true }]);
+</script>
+{% endblock %}

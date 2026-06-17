@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Panoramica · Garmin Connector{% endblock %}
+{% block heading %}Panoramica{% endblock %}
+
+{% block content %}
+{% if not garmin_configured %}
+<div class="banner">⚠️ Credenziali Garmin non configurate. Inserisci <b>GARMIN_EMAIL</b> e <b>GARMIN_PASSWORD</b> nel file <code>.env</code>, poi premi <b>Sincronizza</b>.</div>
+{% elif not has_data %}
+<div class="banner info">Nessun dato ancora salvato. Premi <b>↻ Sincronizza</b> in alto a destra per scaricare i tuoi dati da Garmin.</div>
+{% endif %}
+
+<section class="cards">
+  <div class="card stat"><span class="label">Passi (ultimo)</span><span class="value">{{ kpis.steps | num if kpis.steps is not none else '—' }}</span></div>
+  <div class="card stat"><span class="label">FC riposo</span><span class="value">{{ kpis.resting_hr | num if kpis.resting_hr is not none else '—' }} <span class="unit">bpm</span></span></div>
+  <div class="card stat"><span class="label">Body Battery max</span><span class="value">{{ kpis.body_battery | num if kpis.body_battery is not none else '—' }}</span></div>
+  <div class="card stat"><span class="label">Sleep score</span><span class="value">{{ kpis.sleep_score | num if kpis.sleep_score is not none else '—' }}</span></div>
+  <div class="card stat"><span class="label">VO₂max</span><span class="value">{{ kpis.vo2max | num(1) if kpis.vo2max is not none else '—' }}</span></div>
+  <div class="card stat"><span class="label">Training readiness</span><span class="value">{{ kpis.readiness | num if kpis.readiness is not none else '—' }}</span></div>
+  <div class="card stat"><span class="label">Stress medio</span><span class="value">{{ kpis.stress | num if kpis.stress is not none else '—' }}</span></div>
+  <div class="card stat"><span class="label">Training status</span><span class="value small">{{ kpis.training_status or '—' }}</span></div>
+</section>
+
+<section class="grid-2">
+  <div class="card"><h2>Passi · ultimi 28 giorni</h2><div class="chart-box"><canvas id="stepsChart"></canvas></div></div>
+  <div class="card"><h2>FC a riposo</h2><div class="chart-box"><canvas id="rhrChart"></canvas></div></div>
+  <div class="card"><h2>Sleep score</h2><div class="chart-box"><canvas id="sleepChart"></canvas></div></div>
+  <div class="card"><h2>VO₂max</h2><div class="chart-box"><canvas id="vo2Chart"></canvas></div></div>
+</section>
+
+<div class="card mt">
+  <h2>Ultime attività</h2>
+  {% if activities %}
+  <table>
+    <thead><tr><th>Data</th><th>Tipo</th><th>Distanza</th><th>Durata</th><th>FC media</th></tr></thead>
+    <tbody>
+      {% for a in activities %}
+      <tr>
+        <td><a class="row-link" href="/activities/{{ a.garmin_activity_id }}">{{ a.start_time.strftime('%d/%m %H:%M') if a.start_time else '—' }}</a></td>
+        <td><span class="tag">{{ a.activity_type or '—' }}</span></td>
+        <td>{{ a.distance_m | km }}</td>
+        <td>{{ a.duration_sec | duration }}</td>
+        <td>{{ a.avg_hr | num }} bpm</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">Nessuna attività.</p>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const C = {{ chart | tojson }};
+  GC.lineChart("stepsChart", C.labels, [{ label: "Passi", data: C.steps, color: GC.PALETTE.blue, fill: true }], { beginAtZero: true });
+  GC.lineChart("rhrChart", C.labels, [{ label: "FC riposo", data: C.resting_hr, color: GC.PALETTE.red }]);
+  GC.lineChart("sleepChart", C.sleep_labels, [{ label: "Sleep score", data: C.sleep_score, color: GC.PALETTE.purple, fill: true }]);
+  GC.lineChart("vo2Chart", C.vo2_labels, [{ label: "VO₂max", data: C.vo2max, color: GC.PALETTE.green }]);
+</script>
+{% endblock %}

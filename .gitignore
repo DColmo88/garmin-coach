@@ -1,0 +1,19 @@
+# Segreti e dati locali
+.env
+data/
+*.db
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Playwright MCP scratch files
+.playwright-mcp/

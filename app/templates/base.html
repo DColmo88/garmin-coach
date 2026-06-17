@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}Garmin Connector{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="logo"><span class="dot"></span> Garmin<b>Connector</b></div>
+    <nav>
+      {% set items = [
+        ('overview', '/', '◎ Panoramica'),
+        ('activities', '/activities', '🏃 Attività'),
+        ('sleep', '/sleep', '🌙 Sonno'),
+        ('health', '/health', '❤️ Salute'),
+        ('body', '/body', '⚖️ Corpo'),
+        ('performance', '/performance', '📈 Performance'),
+        ('devices', '/devices', '⌚ Dispositivi'),
+        ('ai', '/ai', '🤖 AI Insights'),
+      ] %}
+      {% for key, url, label in items %}
+        <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <div class="sidebar-foot">
+      <span class="status {{ 'ok' if garmin_configured else 'warn' }}">
+        {{ '● Garmin OK' if garmin_configured else '● Configura .env' }}
+      </span>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <h1>{% block heading %}Dashboard{% endblock %}</h1>
+      <button id="syncBtn" class="btn primary">↻ Sincronizza</button>
+    </header>
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <div id="syncToast" class="toast"></div>
+  <script src="/static/app.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

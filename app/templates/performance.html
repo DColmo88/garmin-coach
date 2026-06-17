@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Performance · Garmin Connector{% endblock %}
+{% block heading %}Performance & Training{% endblock %}
+
+{% block content %}
+<section class="grid-2">
+  <div class="card"><h2>VO₂max (corsa / bici)</h2><div class="chart-box"><canvas id="vo2Chart"></canvas></div></div>
+  <div class="card"><h2>Training load</h2><div class="chart-box"><canvas id="loadChart"></canvas></div></div>
+  <div class="card"><h2>HRV (media settimanale)</h2><div class="chart-box"><canvas id="hrvChart"></canvas></div></div>
+  <div class="card"><h2>Training readiness</h2><div class="chart-box"><canvas id="readyChart"></canvas></div></div>
+</section>
+
+{% if error %}<div class="banner mt">{{ error }}</div>{% endif %}
+
+{% if snapshot %}
+<section class="grid-2 mt">
+  <div class="card">
+    <h2>🏅 Record personali</h2>
+    {% if snapshot.personal_records %}
+    <table>
+      <thead><tr><th>Tipo</th><th>Valore</th><th>Data</th></tr></thead>
+      <tbody>
+        {% for pr in snapshot.personal_records[:12] %}
+        <tr>
+          <td>{{ pr.typeId if pr.typeId is defined else (pr.activityType or '—') }}</td>
+          <td>{{ pr.value if pr.value is defined else '—' }}</td>
+          <td>{{ pr.prStartTimeGmtFormatted if pr.prStartTimeGmtFormatted is defined else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="empty">Nessun record disponibile.</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2>🏁 Previsioni di gara</h2>
+    {% set rp = snapshot.race_predictions %}
+    {% if rp %}
+    <ul class="kv">
+      <li><span class="k">5K</span><span>{{ rp.time5K | duration if rp.time5K is defined else '—' }}</span></li>
+      <li><span class="k">10K</span><span>{{ rp.time10K | duration if rp.time10K is defined else '—' }}</span></li>
+      <li><span class="k">Mezza maratona</span><span>{{ rp.timeHalfMarathon | duration if rp.timeHalfMarathon is defined else '—' }}</span></li>
+      <li><span class="k">Maratona</span><span>{{ rp.timeMarathon | duration if rp.timeMarathon is defined else '—' }}</span></li>
+    </ul>
+    {% else %}<p class="empty">Previsioni non disponibili.</p>{% endif %}
+    <h3 class="mt">Endurance / Hill score</h3>
+    <ul class="kv">
+      <li><span class="k">Endurance score</span><span>{{ snapshot.endurance_score.overallScore if snapshot.endurance_score and snapshot.endurance_score.overallScore is defined else '—' }}</span></li>
+      <li><span class="k">Hill score</span><span>{{ snapshot.hill_score.overallScore if snapshot.hill_score and snapshot.hill_score.overallScore is defined else '—' }}</span></li>
+    </ul>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const C = {{ chart | tojson }};
+  GC.lineChart("vo2Chart", C.labels, [
+    { label: "Corsa", data: C.vo2max, color: GC.PALETTE.green },
+    { label: "Bici", data: C.vo2max_cycling, color: GC.PALETTE.blue },
+  ]);
+  GC.barChart("loadChart", C.labels, [{ label: "Load", data: C.training_load, color: GC.PALETTE.amber }]);
+  GC.lineChart("hrvChart", C.labels, [{ label: "HRV", data: C.hrv, color: GC.PALETTE.purple, fill: true }]);
+  GC.lineChart("readyChart", C.labels, [{ label: "Readiness", data: C.readiness, color: GC.PALETTE.cyan, fill: true }], { beginAtZero: true });
+</script>
+{% endblock %}

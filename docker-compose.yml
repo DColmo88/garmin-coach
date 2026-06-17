@@ -1,0 +1,26 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Persistenza di DB SQLite e token Garmin tra i riavvii
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Quando passerai a Postgres su Hetzner, scommenta questo servizio
+  # e imposta DATABASE_URL=postgresql+psycopg://garmin:password@db:5432/garmin
+  # db:
+  #   image: postgres:16
+  #   environment:
+  #     POSTGRES_USER: garmin
+  #     POSTGRES_PASSWORD: password
+  #     POSTGRES_DB: garmin
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+# volumes:
+#   pgdata:

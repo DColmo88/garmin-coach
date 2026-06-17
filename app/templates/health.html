@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Salute · Garmin Connector{% endblock %}
+{% block heading %}Salute & Wellness{% endblock %}
+
+{% block content %}
+<section class="grid-2">
+  <div class="card"><h2>Frequenza cardiaca (riposo / min / max)</h2><div class="chart-box"><canvas id="hrChart"></canvas></div></div>
+  <div class="card"><h2>Stress medio</h2><div class="chart-box"><canvas id="stressChart"></canvas></div></div>
+  <div class="card"><h2>Body Battery (max / min)</h2><div class="chart-box"><canvas id="bbChart"></canvas></div></div>
+  <div class="card"><h2>Passi e piani</h2><div class="chart-box"><canvas id="stepsChart"></canvas></div></div>
+  <div class="card"><h2>SpO₂ e respirazione</h2><div class="chart-box"><canvas id="spo2Chart"></canvas></div></div>
+  <div class="card"><h2>Minuti di intensità</h2><div class="chart-box"><canvas id="intensityChart"></canvas></div></div>
+</section>
+
+<div class="card mt">
+  <h2>Dettaglio giornaliero</h2>
+  {% if rows %}
+  <table>
+    <thead><tr><th>Giorno</th><th>Passi</th><th>FC riposo</th><th>Stress</th><th>BB max/min</th><th>SpO₂</th><th>Resp.</th><th>Int. (mod/vig)</th><th>kcal att.</th></tr></thead>
+    <tbody>
+      {% for w in rows %}
+      <tr>
+        <td>{{ w.day.strftime('%d/%m') }}</td>
+        <td>{{ w.total_steps | num }}</td>
+        <td>{{ w.resting_hr | num }}</td>
+        <td>{{ w.avg_stress | num }}</td>
+        <td>{{ w.body_battery_high | num }}/{{ w.body_battery_low | num }}</td>
+        <td>{{ w.avg_spo2 | num }}%</td>
+        <td>{{ w.avg_respiration | num }}</td>
+        <td>{{ w.moderate_intensity_min | num }}/{{ w.vigorous_intensity_min | num }}</td>
+        <td>{{ w.active_calories | num }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">Nessun dato salute. Premi <b>Sincronizza</b>.</p>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const C = {{ chart | tojson }};
+  GC.lineChart("hrChart", C.labels, [
+    { label: "Riposo", data: C.resting_hr, color: GC.PALETTE.red },
+    { label: "Min", data: C.min_hr, color: GC.PALETTE.cyan },
+    { label: "Max", data: C.max_hr, color: GC.PALETTE.amber },
+  ]);
+  GC.lineChart("stressChart", C.labels, [{ label: "Stress", data: C.stress, color: GC.PALETTE.amber, fill: true }], { beginAtZero: true });
+  GC.lineChart("bbChart", C.labels, [
+    { label: "Max", data: C.body_battery_high, color: GC.PALETTE.green },
+    { label: "Min", data: C.body_battery_low, color: GC.PALETTE.purple },
+  ], { beginAtZero: true });
+  GC.barChart("stepsChart", C.labels, [{ label: "Passi", data: C.steps, color: GC.PALETTE.blue }]);
+  GC.lineChart("spo2Chart", C.labels, [
+    { label: "SpO₂ %", data: C.spo2, color: GC.PALETTE.cyan },
+    { label: "Respirazione", data: C.respiration, color: GC.PALETTE.pink },
+  ]);
+  GC.barChart("intensityChart", C.labels, [
+    { label: "Moderata", data: C.moderate, color: GC.PALETTE.green },
+    { label: "Vigorosa", data: C.vigorous, color: GC.PALETTE.red },
+  ], true);
+</script>
+{% endblock %}

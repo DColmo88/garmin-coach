@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Dettaglio attività · Garmin Connector{% endblock %}
+{% block heading %}Dettaglio attività{% endblock %}
+
+{% block content %}
+<a class="btn small" href="/activities">← Torna alle attività</a>
+
+{% if activity %}
+<div class="card mt">
+  <h2>{{ activity.name or 'Attività' }} <span class="tag">{{ activity.activity_type or '—' }}</span></h2>
+  <div class="grid-3">
+    <ul class="kv">
+      <li><span class="k">Data</span><span>{{ activity.start_time.strftime('%d/%m/%Y %H:%M') if activity.start_time else '—' }}</span></li>
+      <li><span class="k">Distanza</span><span>{{ activity.distance_m | km }}</span></li>
+      <li><span class="k">Durata</span><span>{{ activity.duration_sec | duration }}</span></li>
+    </ul>
+    <ul class="kv">
+      <li><span class="k">Passo</span><span>{{ activity.avg_speed | pace }}</span></li>
+      <li><span class="k">FC media</span><span>{{ activity.avg_hr | num }} bpm</span></li>
+      <li><span class="k">FC max</span><span>{{ activity.max_hr | num }} bpm</span></li>
+    </ul>
+    <ul class="kv">
+      <li><span class="k">Dislivello</span><span>{{ activity.elevation_gain_m | num }} m</span></li>
+      <li><span class="k">Training effect</span><span>{{ activity.aerobic_te | num(1) }} aer / {{ activity.anaerobic_te | num(1) }} anaer</span></li>
+      <li><span class="k">Calorie</span><span>{{ activity.calories | num }} kcal</span></li>
+    </ul>
+  </div>
+</div>
+{% else %}
+<div class="banner mt">Attività non trovata nel database locale. Prova a sincronizzare.</div>
+{% endif %}
+
+{% if error %}
+<div class="banner mt">{{ error }}</div>
+{% elif detail %}
+  {% set hr = detail.hr_zones %}
+  {% if hr %}
+  <div class="card mt">
+    <h2>Tempo nelle zone di frequenza cardiaca</h2>
+    <div class="chart-box short"><canvas id="hrZoneChart"></canvas></div>
+  </div>
+  {% endif %}
+
+  {% set splits = detail.splits.lapDTOs if detail.splits and detail.splits.lapDTOs else None %}
+  {% if splits %}
+  <div class="card mt">
+    <h2>Splits ({{ splits | length }})</h2>
+    <table>
+      <thead><tr><th>#</th><th>Distanza</th><th>Tempo</th><th>Passo</th><th>FC media</th></tr></thead>
+      <tbody>
+        {% for lap in splits %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ lap.distance | km }}</td>
+          <td>{{ lap.duration | duration }}</td>
+          <td>{{ lap.averageSpeed | pace }}</td>
+          <td>{{ lap.averageHR | num }} bpm</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% set w = detail.weather %}
+  {% if w %}
+  <div class="card mt">
+    <h2>Meteo</h2>
+    <ul class="kv">
+      <li><span class="k">Temperatura</span><span>{{ w.temp if w.temp is defined else '—' }}°</span></li>
+      <li><span class="k">Condizioni</span><span>{{ w.weatherTypeDTO.desc if w.weatherTypeDTO else '—' }}</span></li>
+      <li><span class="k">Vento</span><span>{{ w.windSpeed if w.windSpeed is defined else '—' }}</span></li>
+    </ul>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if detail and detail.hr_zones %}
+<script>
+  const HR = {{ detail.hr_zones | tojson }};
+  const labels = HR.map((z, i) => "Zona " + (z.zoneNumber || (i + 1)));
+  const secs = HR.map((z) => Math.round((z.secsInZone || 0) / 60));
+  const colors = ["#3fb950", "#39c5cf", "#d29922", "#f0883e", "#f85149"];
+  GC.barChart("hrZoneChart", labels, [{ label: "Minuti", data: secs, color: colors }]);
+</script>
+{% endif %}
+{% endblock %}

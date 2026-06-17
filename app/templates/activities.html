@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Attività · Garmin Connector{% endblock %}
+{% block heading %}Attività{% endblock %}
+
+{% block content %}
+<section class="grid-2">
+  <div class="card">
+    <h2>Distribuzione per tipo</h2>
+    <div class="chart-box"><canvas id="typeChart"></canvas></div>
+  </div>
+  <div class="card stat" style="justify-content:center">
+    <span class="label">Totale attività salvate</span>
+    <span class="value">{{ activities | length }}</span>
+    <p class="hint">Clicca su una riga per vedere splits, zone FC, meteo e gear della singola attività.</p>
+  </div>
+</section>
+
+<div class="card mt">
+  <h2>Elenco allenamenti</h2>
+  {% if activities %}
+  <table>
+    <thead><tr><th>Data</th><th>Nome</th><th>Tipo</th><th>Distanza</th><th>Durata</th><th>Passo</th><th>FC med/max</th><th>Disl.</th><th>kcal</th></tr></thead>
+    <tbody>
+      {% for a in activities %}
+      <tr>
+        <td><a class="row-link" href="/activities/{{ a.garmin_activity_id }}">{{ a.start_time.strftime('%d/%m/%y %H:%M') if a.start_time else '—' }}</a></td>
+        <td>{{ a.name or '—' }}</td>
+        <td><span class="tag">{{ a.activity_type or '—' }}</span></td>
+        <td>{{ a.distance_m | km }}</td>
+        <td>{{ a.duration_sec | duration }}</td>
+        <td>{{ a.avg_speed | pace }}</td>
+        <td>{{ a.avg_hr | num }}/{{ a.max_hr | num }}</td>
+        <td>{{ a.elevation_gain_m | num }} m</td>
+        <td>{{ a.calories | num }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">Nessuna attività. Premi <b>Sincronizza</b>.</p>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const C = {{ chart | tojson }};
+  const colors = [GC.PALETTE.blue, GC.PALETTE.green, GC.PALETTE.amber, GC.PALETTE.purple, GC.PALETTE.cyan, GC.PALETTE.pink, GC.PALETTE.red];
+  GC.doughnutChart("typeChart", C.type_labels, C.type_counts, colors);
+</script>
+{% endblock %}

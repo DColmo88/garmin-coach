@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}AI Insights · Garmin Connector{% endblock %}
+{% block heading %}AI Insights{% endblock %}
+
+{% block content %}
+<div class="banner info">Provider AI attivo: <b>{{ provider_name }}</b>. Lo stub prepara il payload strutturato; collega OpenAI o Claude in <code>app/ai/provider.py</code> per la generazione automatica.</div>
+
+<div class="card ai">
+  <h2>🤖 Genera analisi / piano di allenamento</h2>
+  <p class="hint">Vengono usati i tuoi dati di attività, sonno, salute, performance e corpo degli ultimi 28 giorni.</p>
+  <select id="preset">
+    <option value="Analizza i miei dati e dammi 3 insight principali sullo stato di forma e recupero">Insight su forma e recupero</option>
+    <option value="Crea un piano di allenamento settimanale per la corsa basato sui miei dati">Piano corsa settimanale</option>
+    <option value="Valuta la qualità del mio sonno e suggerisci miglioramenti">Analisi del sonno</option>
+    <option value="Sono sovrallenato? Analizza carico, HRV e readiness">Rischio sovrallenamento</option>
+    <option value="custom">✏️ Obiettivo personalizzato…</option>
+  </select>
+  <input id="goal" type="text" placeholder="Scrivi un obiettivo personalizzato…" style="display:none" />
+  <button id="planBtn" class="btn primary">Genera</button>
+  <pre id="planOutput" class="plan-output"></pre>
+</div>
+
+<div class="card mt">
+  <h2>🔌 Come collegare un LLM</h2>
+  <ul class="kv">
+    <li><span class="k">1. Endpoint dati</span><span><code>GET /api/context</code> restituisce tutto il JSON dei tuoi dati</span></li>
+    <li><span class="k">2. Provider</span><span>Implementa <code>generate_training_plan()</code> in <code>app/ai/provider.py</code></span></li>
+    <li><span class="k">3. Config</span><span>Imposta <code>AI_PROVIDER</code> e la API key nel <code>.env</code></span></li>
+  </ul>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const preset = document.getElementById("preset");
+  const goal = document.getElementById("goal");
+  preset.addEventListener("change", () => {
+    goal.style.display = preset.value === "custom" ? "block" : "none";
+  });
+
+  const planBtn = document.getElementById("planBtn");
+  const planOutput = document.getElementById("planOutput");
+  planBtn.addEventListener("click", async () => {
+    const g = preset.value === "custom" ? (goal.value || "Analizza i miei dati") : preset.value;
+    planBtn.disabled = true; planBtn.textContent = "Genero…";
+    try {
+      const body = new URLSearchParams({ goal: g });
+      const res = await fetch("/ai/plan", { method: "POST", body });
+      const data = await res.json();
+      planOutput.textContent = data.plan || JSON.stringify(data, null, 2);
+      planOutput.classList.add("show");
+    } catch (e) {
+      planOutput.textContent = "Errore: " + e.message;
+      planOutput.classList.add("show");
+    } finally {
+      planBtn.disabled = false; planBtn.textContent = "Genera";
+    }
+  });
+</script>
+{% endblock %}

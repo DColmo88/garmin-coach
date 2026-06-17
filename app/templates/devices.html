@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Dispositivi · Garmin Connector{% endblock %}
+{% block heading %}Dispositivi & Gear{% endblock %}
+
+{% block content %}
+{% if not garmin_configured %}
+<div class="banner">⚠️ Configura le credenziali Garmin nel <code>.env</code> per vedere dispositivi e gear.</div>
+{% elif error %}
+<div class="banner">{{ error }}</div>
+{% endif %}
+
+<div class="card">
+  <h2>⌚ Dispositivi</h2>
+  {% if data.devices %}
+  <div class="grid-3">
+    {% for d in data.devices %}
+    <ul class="kv">
+      <li><span class="k">Modello</span><span>{{ d.productDisplayName if d.productDisplayName is defined else (d.displayName or '—') }}</span></li>
+      <li><span class="k">Firmware</span><span>{{ d.currentFirmwareVersion if d.currentFirmwareVersion is defined else '—' }}</span></li>
+      <li><span class="k">Stato batteria</span><span>{{ d.batteryLevel if d.batteryLevel is defined else '—' }}</span></li>
+    </ul>
+    {% endfor %}
+  </div>
+  {% else %}<p class="empty">Nessun dispositivo (o non sincronizzato).</p>{% endif %}
+</div>
+
+<div class="card mt">
+  <h2>👟 Gear / attrezzatura</h2>
+  {% if data.gear %}
+  <table>
+    <thead><tr><th>Nome</th><th>Tipo</th><th>Distanza totale</th><th>Attività</th></tr></thead>
+    <tbody>
+      {% for g in data.gear %}
+      <tr>
+        <td>{{ g.gear.displayName if g.gear.displayName is defined else (g.gear.customMakeModel or '—') }}</td>
+        <td><span class="tag">{{ g.gear.gearTypeName if g.gear.gearTypeName is defined else '—' }}</span></td>
+        <td>{{ g.stats.totalDistance | km if g.stats and g.stats.totalDistance is defined else '—' }}</td>
+        <td>{{ g.stats.totalActivities if g.stats and g.stats.totalActivities is defined else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">Nessun gear registrato su Garmin Connect.</p>{% endif %}
+</div>
+
+<div class="card mt">
+  <h2>🏆 Badge guadagnati</h2>
+  {% if data.badges and data.badges.earned %}
+  <p class="hint">Totale badge: <b>{{ data.badges.earned | length }}</b></p>
+  <div class="grid-3">
+    {% for b in data.badges.earned[:12] %}
+    <span class="pill">{{ b.badgeName if b.badgeName is defined else '—' }}</span>
+    {% endfor %}
+  </div>
+  {% else %}<p class="empty">Nessun badge.</p>{% endif %}
+</div>
+{% endblock %}

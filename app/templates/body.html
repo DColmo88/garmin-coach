@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Corpo · Garmin Connector{% endblock %}
+{% block heading %}Composizione corporea{% endblock %}
+
+{% block content %}
+<section class="grid-2">
+  <div class="card span-2"><h2>Peso · ultimi 90 giorni (kg)</h2><div class="chart-box"><canvas id="weightChart"></canvas></div></div>
+  <div class="card"><h2>Massa grassa (%)</h2><div class="chart-box"><canvas id="fatChart"></canvas></div></div>
+  <div class="card"><h2>Massa muscolare (kg)</h2><div class="chart-box"><canvas id="muscleChart"></canvas></div></div>
+</section>
+
+<div class="card mt">
+  <h2>Misurazioni</h2>
+  {% if rows %}
+  <table>
+    <thead><tr><th>Giorno</th><th>Peso</th><th>BMI</th><th>Grasso %</th><th>Acqua %</th><th>Muscolo</th><th>Ossa</th></tr></thead>
+    <tbody>
+      {% for b in rows %}
+      <tr>
+        <td>{{ b.day.strftime('%d/%m/%y') }}</td>
+        <td>{{ b.weight_g | kg }}</td>
+        <td>{{ b.bmi | num(1) }}</td>
+        <td>{{ b.body_fat_pct | num(1) }}</td>
+        <td>{{ b.body_water_pct | num(1) }}</td>
+        <td>{{ b.muscle_mass_g | kg }}</td>
+        <td>{{ b.bone_mass_g | kg }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="empty">Nessuna misurazione del corpo. Servono dati da bilancia Garmin Index o inserimento manuale.</p>{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const C = {{ chart | tojson }};
+  GC.lineChart("weightChart", C.labels, [{ label: "Peso", data: C.weight, color: GC.PALETTE.blue, fill: true }]);
+  GC.lineChart("fatChart", C.labels, [{ label: "Grasso %", data: C.body_fat, color: GC.PALETTE.amber }]);
+  GC.lineChart("muscleChart", C.labels, [{ label: "Muscolo", data: C.muscle, color: GC.PALETTE.green }]);
+</script>
+{% endblock %}
