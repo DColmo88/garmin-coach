@@ -17,3 +17,6 @@ __pycache__/
 
 # Playwright MCP scratch files
 .playwright-mcp/
+
+# Claude Code local settings
+.claude/
