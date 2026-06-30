@@ -1,0 +1,23 @@
+{% macro ring(value, vmax=100, label="", sublabel="", size=120) %}
+{% set r = (size / 2) - 8 %}
+{% set circ = 2 * 3.14159265 * r %}
+{% set pct = (value / vmax) if (value is not none and vmax) else 0 %}
+{% set pct = 0 if pct < 0 else (1 if pct > 1 else pct) %}
+{% set band = 'green' if pct >= 0.8 else ('amber' if pct >= 0.5 else 'red') %}
+<div class="ring ring-{{ band }}" style="width:{{ size }}px">
+  <svg viewBox="0 0 {{ size }} {{ size }}" width="{{ size }}" height="{{ size }}">
+    <circle class="ring-track" cx="{{ size/2 }}" cy="{{ size/2 }}" r="{{ r }}"
+            fill="none" stroke-width="8"/>
+    <circle class="ring-val" cx="{{ size/2 }}" cy="{{ size/2 }}" r="{{ r }}"
+            fill="none" stroke-width="8" stroke-linecap="round"
+            stroke-dasharray="{{ circ }}"
+            stroke-dashoffset="{{ circ * (1 - pct) }}"
+            transform="rotate(-90 {{ size/2 }} {{ size/2 }})"/>
+  </svg>
+  <div class="ring-center">
+    <span class="ring-value">{{ value if value is not none else '—' }}</span>
+    {% if label %}<span class="ring-label">{{ label }}</span>{% endif %}
+  </div>
+  {% if sublabel %}<div class="ring-sub">{{ sublabel }}</div>{% endif %}
+</div>
+{% endmacro %}
