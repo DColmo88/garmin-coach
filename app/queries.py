@@ -101,7 +101,7 @@ def coach_snapshot(db: Session) -> dict:
     load_28 = [t.training_load for t in training[-28:]]
     avg_load_7 = _avg(load_7)
     avg_load_28 = _avg(load_28)
-    load_ratio = (avg_load_7 / avg_load_28) if (avg_load_7 and avg_load_28) else None
+    load_ratio = (avg_load_7 / avg_load_28) if (avg_load_7 is not None and avg_load_28) else None
 
     latest_sleep = sleep[-1] if sleep else None
     deep_pct = None
