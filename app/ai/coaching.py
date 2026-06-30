@@ -62,7 +62,7 @@ def _message(snap: dict, r: ReadinessResult) -> str:
         parts.append(f"Body Battery a {round(bb)}")
     detail = ", ".join(parts) if parts else "Ecco il quadro di oggi"
     return (f"Prontezza {r.score}/100 — {r.emoji} {r.label}. "
-            f"{detail.capitalize()}. {r.recommendation}.")
+            f"{detail}. {r.recommendation}.")
 
 
 def build_coach_output(snap: dict, readiness: ReadinessResult) -> CoachOutput:
