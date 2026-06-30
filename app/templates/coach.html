@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% from "_components.html" import ring %}
+{% block title %}Coach · Garmin Connector{% endblock %}
+{% block heading %}Coach{% endblock %}
+{% block content %}
+
+<section class="coach-hero">
+  {{ ring(readiness.score, 100, "Readiness", readiness.label, 160) }}
+  <div class="hero-text">
+    <p class="hero-status">{{ readiness.emoji }} {{ readiness.label }}</p>
+    <p class="hero-msg">{{ coaching.message }}</p>
+    <div class="pill-row">
+      {% for f in readiness.breakdown %}
+        <span class="pill {{ f.color }}">
+          <span class="p-name">{{ f.name }}</span>
+          <span class="p-val">{{ f.value }}</span>
+        </span>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<div class="ring-mini-row">
+  {% for m in mini %}
+    {{ ring(m.value, m.vmax | default(100), m.label, "", 96) }}
+  {% endfor %}
+</div>
+
+<div class="card-grid" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px">
+  <div class="monitor-card" style="flex:1;min-width:180px">
+    <div class="mc-label">Health Monitor</div>
+    <div class="mc-value">{{ in_range }}/{{ total_metrics }} in range</div>
+  </div>
+  <div class="monitor-card" style="flex:1;min-width:180px">
+    <div class="mc-label">Stress</div>
+    <div class="mc-value">
+      {{ snap.avg_stress_latest | round | int if snap.avg_stress_latest is not none else '—' }}
+    </div>
+  </div>
+</div>
+
+<h2 style="margin:8px 0 12px">Insight di oggi</h2>
+{% if insights %}
+  {% for i in insights %}
+    <div class="insight-card {{ i.color }}">
+      <p class="ic-title">{{ i.icon }} {{ i.title }}</p>
+      <p class="ic-text">{{ i.text }}</p>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="hero-msg">Nessun insight rilevante oggi — continua a sincronizzare i dati.</p>
+{% endif %}
+
+<h2 style="margin:20px 0 12px">Allenamento suggerito</h2>
+<div class="workout-card">
+  <div class="w-head">
+    <span class="w-type">{{ coaching.workout.icon }} {{ coaching.workout.type }}</span>
+    <span class="w-meta">{{ coaching.workout.duration }}</span>
+  </div>
+  <p class="w-meta">{{ coaching.workout.hr_zone }}</p>
+  <p class="w-note">"{{ coaching.workout.note }}"</p>
+</div>
+
+{% endblock %}

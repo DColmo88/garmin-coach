@@ -6,6 +6,9 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app import queries as q
+from app.ai.insights import top_insights
+from app.ai.provider import get_provider
+from app.ai.readiness import compute_readiness
 from app.config import settings
 from app.db.database import get_session
 from app.garmin import service
@@ -23,6 +26,29 @@ def _ctx(request: Request, active: str, **extra) -> dict:
     }
     base.update(extra)
     return base
+
+
+# --------------------------- Coach ---------------------------
+
+@router.get("/coach", response_class=HTMLResponse)
+def coach(request: Request, db: Session = Depends(get_session)):
+    snap = q.coach_snapshot(db)
+    readiness = compute_readiness(snap)
+    insights = top_insights(snap, 3)
+    coaching = get_provider().coach(snap, readiness)
+    mini = [
+        {"value": snap.get("sleep_score"), "label": "Sonno"},
+        {"value": snap.get("body_battery_high"), "label": "Battery"},
+        {"value": round(snap["vo2max_latest"]) if snap.get("vo2max_latest") else None,
+         "label": "VO₂max", "vmax": 70},
+    ]
+    in_range = sum(1 for f in readiness.breakdown if f.color == "green")
+    return templates.TemplateResponse(
+        "coach.html",
+        _ctx(request, "coach", snap=snap, readiness=readiness, insights=insights,
+             coaching=coaching, mini=mini, in_range=in_range,
+             total_metrics=len(readiness.breakdown)),
+    )
 
 
 # --------------------------- Panoramica ---------------------------
