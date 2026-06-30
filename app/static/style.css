@@ -171,16 +171,16 @@ ul.kv .k { color: var(--muted); }
   .main { margin-left: 72px; }
 }
 
-/* ===== Coach design system (dark, blend Oura/Whoop) ===== */
+/* ===== Coach design system (dark, blend Oura/Whoop) =====
+   Token nuovi e non in conflitto: NON ridefinire --bg/--text/--accent/--amber
+   (sono globali e usati dalle altre 7 pagine). L'accent teal del Coach vive
+   in --c-accent, scoped ai soli componenti .coach-*. */
 :root {
-  --bg: #0c0e14;
   --surface: #161922;
   --surface-2: #1d212c;
   --hairline: #262b38;
-  --text: #e8ebf2;
   --text-dim: #9aa3b2;
-  --accent: #00d4aa;
-  --amber: #f5a623;
+  --c-accent: #00d4aa;
   --good: #35d07f;
   --warn: #f5a623;
   --bad: #ff5c5c;
@@ -246,7 +246,7 @@ ul.kv .k { color: var(--muted); }
 
 .progress-bar { height: 8px; border-radius: 6px; background: var(--surface-2);
   overflow: hidden; }
-.progress-bar > span { display: block; height: 100%; background: var(--accent); }
+.progress-bar > span { display: block; height: 100%; background: var(--c-accent); }
 
 .workout-card {
   background: var(--surface-2); border: 1px solid var(--hairline);

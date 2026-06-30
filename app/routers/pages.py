@@ -36,11 +36,13 @@ def coach(request: Request, db: Session = Depends(get_session)):
     readiness = compute_readiness(snap)
     insights = top_insights(snap, 3)
     coaching = get_provider().coach(snap, readiness)
+    def _r(v):
+        return round(v) if v is not None else None
+
     mini = [
-        {"value": snap.get("sleep_score"), "label": "Sonno"},
-        {"value": snap.get("body_battery_high"), "label": "Battery"},
-        {"value": round(snap["vo2max_latest"]) if snap.get("vo2max_latest") else None,
-         "label": "VO₂max", "vmax": 70},
+        {"value": _r(snap.get("sleep_score")), "label": "Sonno"},
+        {"value": _r(snap.get("body_battery_high")), "label": "Battery"},
+        {"value": _r(snap.get("vo2max_latest")), "label": "VO₂max", "vmax": 70},
     ]
     in_range = sum(1 for f in readiness.breakdown if f.color == "green")
     return templates.TemplateResponse(
