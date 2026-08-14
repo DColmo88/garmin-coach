@@ -2,6 +2,9 @@
 
 **Design document · 2026-08-14 · approvato tramite Q&A con Davide**
 
+> Descrizione sistematica di ogni componente dell'app: [`docs/ARCHITETTURA.md`](../../ARCHITETTURA.md).
+> Specifiche di interfaccia e pagine: [`PRD_GarminCoach.md`](../../../PRD_GarminCoach.md).
+
 ## 1. Visione
 
 Trasformare il Garmin Connector da dashboard single-user in un **laboratorio da atleta multi-utente**:

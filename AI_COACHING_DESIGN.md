@@ -3,6 +3,8 @@
 > **Obiettivo:** trasformare il Garmin Connector da semplice dashboard di lettura a un **coach personale AI** che ti dice ogni giorno cosa fare, perché farlo, e ti tiene motivato con gamification e piani strutturati.
 
 > **⚠️ Aggiornamento 2026-08-14 — v2:** il progetto è evoluto in un sistema **multi-utente** con **chat AI coach**, **obiettivi configurabili**, **sync giornaliera automatica** e **notifiche** (Web Push PWA + email + Telegram). Le decisioni architetturali complete sono in `docs/superpowers/specs/2026-08-14-garmin-coach-v2-multiuser-ai-design.md` — quella spec **prevale** su questo documento dove i due divergono. Questo file resta valido per: readiness engine, insights engine, gamification, training plans.
+>
+> Per la descrizione sistematica di ogni componente dell'app: **`docs/ARCHITETTURA.md`**.
 
 ---
 

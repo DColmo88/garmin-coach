@@ -3,6 +3,16 @@
 Dashboard personale per monitorare i dati di **Garmin Connect** e fornirli a un modello AI
 per generare piani di allenamento.
 
+## Documenti di riferimento
+
+| Documento | Cosa contiene |
+|---|---|
+| `docs/ARCHITETTURA.md` | **Catalogo sistematico dei componenti** — cosa fa ogni modulo, stato di avanzamento |
+| `docs/superpowers/specs/2026-08-14-garmin-coach-v2-multiuser-ai-design.md` | Decisioni architetturali v2 (multi-utente, chat AI, notifiche, automazione) |
+| `docs/superpowers/plans/` | Piani di implementazione task-by-task |
+| `PRD_GarminCoach.md` | Specifiche di interfaccia e pagine |
+| `AI_COACHING_DESIGN.md` | Motori readiness/insights, gamification, training plans |
+
 ## Cos'è stato fatto
 
 - **Connessione Garmin**: tramite la libreria [`python-garminconnect`](https://github.com/cyberjunky/python-garminconnect) (cyberjunky). Login email/password (no MFA) con **cache del token** su disco: non si rifà il login a ogni avvio.

@@ -1,6 +1,10 @@
 # PRD — Garmin Coach
 **Product Requirements Document · v1.0 · Giugno 2026**
 
+> Questo PRD descrive **l'interfaccia e le pagine**. Per l'architettura tecnica di ogni componente vedi
+> `docs/ARCHITETTURA.md`; per le decisioni della v2 (multi-utente, chat AI, notifiche) vedi
+> `docs/superpowers/specs/2026-08-14-garmin-coach-v2-multiuser-ai-design.md`.
+
 ---
 
 ## 1. Executive Summary
