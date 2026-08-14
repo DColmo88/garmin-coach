@@ -21,6 +21,7 @@ from app.pipeline import run_for_user
 from app.routers import auth as auth_router
 from app.routers import chat as chat_router
 from app.routers import pages
+from app.routers import settings as settings_router
 from app.scheduler import next_run_time, start_scheduler, stop_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +33,7 @@ app = FastAPI(title="Garmin Coach")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.include_router(auth_router.router)
 app.include_router(chat_router.router)
+app.include_router(settings_router.router)
 app.include_router(pages.router)
 
 

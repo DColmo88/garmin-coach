@@ -106,6 +106,55 @@ def bootstrap_from_env(validate: bool = True) -> str:
         db.close()
 
 
+def generate_vapid_keys() -> str:
+    """Genera la coppia di chiavi per le notifiche push, pronte da incollare."""
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    private = ec.generate_private_key(ec.SECP256R1())
+
+    # La chiave privata va in PKCS8/PEM su una riga (pywebpush la accetta così).
+    private_pem = private.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode()
+
+    # La pubblica va in base64url del punto non compresso: è ciò che il browser
+    # si aspetta come applicationServerKey.
+    public_raw = private.public_key().public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint,
+    )
+    public_b64 = base64.urlsafe_b64encode(public_raw).decode().rstrip("=")
+
+    private_flat = private_pem.replace("\n", "\\n")
+    return (
+        "Aggiungi queste righe al .env:\n\n"
+        f"VAPID_PUBLIC_KEY={public_b64}\n"
+        f'VAPID_PRIVATE_KEY="{private_flat}"\n'
+        "VAPID_CONTACT_EMAIL=tua@email.it\n"
+    )
+
+
+def telegram_webhook_url() -> str:
+    """L'URL da registrare presso Telegram, con il comando pronto."""
+    from app.config import settings
+
+    if not settings.TELEGRAM_BOT_TOKEN:
+        return "TELEGRAM_BOT_TOKEN non impostato nel .env: niente da registrare."
+
+    url = f"{settings.PUBLIC_BASE_URL}/telegram/webhook/{settings.telegram_webhook_secret}"
+    return (
+        "Registra il webhook con:\n\n"
+        f'curl -s "https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}'
+        f'/setWebhook?url={url}"\n\n'
+        f"URL del webhook: {url}\n"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="app.cli", description="Amministrazione Garmin Coach")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -125,6 +174,9 @@ def main() -> None:
         "--no-validate", action="store_true", help="non verificare le credenziali su Garmin"
     )
 
+    sub.add_parser("vapid-keys", help="genera le chiavi per le notifiche push")
+    sub.add_parser("telegram-webhook", help="mostra l'URL del webhook Telegram")
+
     args = parser.parse_args()
 
     if args.cmd == "create-invite":
@@ -136,6 +188,10 @@ def main() -> None:
         print("Fatto." if set_admin(args.email) else f"Utente {args.email} non trovato.")
     elif args.cmd == "bootstrap-from-env":
         print(bootstrap_from_env(validate=not args.no_validate))
+    elif args.cmd == "vapid-keys":
+        print(generate_vapid_keys())
+    elif args.cmd == "telegram-webhook":
+        print(telegram_webhook_url())
 
 
 if __name__ == "__main__":

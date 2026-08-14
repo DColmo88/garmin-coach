@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Garmin Connector{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css?v={{ static_v }}" />
+  <link rel="manifest" href="/static/manifest.json" />
+  <meta name="theme-color" content="#0d1117" />
+  <link rel="apple-touch-icon" href="/static/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Coach" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -23,6 +29,7 @@
         ('performance', '/performance', '📈 Performance'),
         ('devices', '/devices', '⌚ Dispositivi'),
         ('ai', '/ai', '🤖 AI Insights'),
+        ('settings', '/settings', '⚙️ Impostazioni'),
       ] %}
       {% for key, url, label in items %}
         <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">{{ label }}</a>

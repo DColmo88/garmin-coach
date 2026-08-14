@@ -41,6 +41,40 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+    # Indirizzo pubblico dell'app: finisce nei link delle notifiche
+    PUBLIC_BASE_URL: str = os.getenv("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+
+    # Notifiche — email (SMTP)
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "")
+    SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+    SMTP_USE_SSL: bool = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
+
+    # Notifiche — Telegram
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+    @property
+    def telegram_webhook_secret(self) -> str:
+        """Segreto nell'URL del webhook, derivato dal token del bot.
+
+        Deterministico (non serve un'altra variabile da configurare) ma non
+        risalibile al token, così l'URL può stare nei log di Telegram.
+        """
+        import hashlib
+
+        if not self.TELEGRAM_BOT_TOKEN:
+            return ""
+        seed = f"{self.TELEGRAM_BOT_TOKEN}{self.SESSION_SECRET}".encode()
+        return hashlib.sha256(seed).hexdigest()[:32]
+
+    # Notifiche — Web Push (PWA)
+    VAPID_PUBLIC_KEY: str = os.getenv("VAPID_PUBLIC_KEY", "")
+    VAPID_PRIVATE_KEY: str = os.getenv("VAPID_PRIVATE_KEY", "")
+    VAPID_CONTACT_EMAIL: str = os.getenv("VAPID_CONTACT_EMAIL", "noreply@garmin-coach.local")
+
     @property
     def ai_configured(self) -> bool:
         if self.AI_PROVIDER == "claude":

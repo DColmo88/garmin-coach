@@ -73,3 +73,45 @@ def test_set_admin(cli, test_db):
     session = test_db()
     assert session.query(User).one().is_admin is True
     session.close()
+
+
+# --------------------------- notifiche ---------------------------
+
+def test_vapid_keys_are_usable_by_pywebpush():
+    """Le chiavi generate devono firmare davvero, non solo sembrare corrette."""
+    import re
+
+    from py_vapid import Vapid01
+
+    from app.cli import generate_vapid_keys
+
+    output = generate_vapid_keys()
+    public = re.search(r"VAPID_PUBLIC_KEY=(\S+)", output).group(1)
+    private = re.search(r'VAPID_PRIVATE_KEY="(.+)"', output).group(1).replace("\\n", "\n")
+
+    # la pubblica è un punto non compresso P-256 (65 byte) in base64url
+    assert len(public) == 87 and "=" not in public
+
+    headers = Vapid01.from_pem(private.encode()).sign(
+        {"aud": "https://push.example.com", "sub": "mailto:a@b.it"}
+    )
+    assert "Authorization" in headers
+
+
+def test_vapid_keys_differ_each_time():
+    from app.cli import generate_vapid_keys
+
+    assert generate_vapid_keys() != generate_vapid_keys()
+
+
+def test_telegram_webhook_url_needs_a_token(monkeypatch):
+    from app.cli import telegram_webhook_url
+
+    monkeypatch.setattr("app.config.settings.TELEGRAM_BOT_TOKEN", "")
+    assert "non impostato" in telegram_webhook_url()
+
+    monkeypatch.setattr("app.config.settings.TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setattr("app.config.settings.PUBLIC_BASE_URL", "https://coach.example.it")
+    output = telegram_webhook_url()
+    assert "https://coach.example.it/telegram/webhook/" in output
+    assert "setWebhook" in output

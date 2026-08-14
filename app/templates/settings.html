@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block title %}Impostazioni · Garmin Coach{% endblock %}
+{% block heading %}Impostazioni{% endblock %}
+
+{% block content %}
+
+{% if saved %}
+  <div class="banner ok">✅ Preferenze salvate.</div>
+{% endif %}
+
+<form method="post" action="/settings/notifications">
+
+  <h2 class="section-title">Come ti raggiungo</h2>
+  <p class="section-hint">
+    Un canale va prima collegato, poi acceso. Se nessuno è collegato, gli avvisi
+    restano solo dentro l'app.
+  </p>
+
+  <div class="channel-grid">
+    {% for c in channels %}
+    <div class="channel-card {{ 'off' if not c.configured else '' }}">
+      <div class="channel-head">
+        <label class="switch">
+          <input type="checkbox" name="channel_{{ c.key }}"
+                 {{ 'checked' if c.enabled else '' }}
+                 {{ 'disabled' if not c.configured else '' }} />
+          <span class="switch-track"></span>
+        </label>
+        <span class="channel-label">{{ c.label }}</span>
+      </div>
+
+      {% if not c.configured %}
+        <p class="channel-state muted">Non configurato sul server.</p>
+      {% elif c.linked %}
+        <p class="channel-state ok">● Collegato</p>
+      {% else %}
+        <p class="channel-state warn">● Da collegare</p>
+      {% endif %}
+
+      {% if c.key == 'webpush' and c.configured %}
+        <button type="button" class="btn small" id="pushBtn">
+          {{ 'Disattiva su questo dispositivo' if c.linked else 'Attiva su questo dispositivo' }}
+        </button>
+        <p class="channel-note" id="pushNote">
+          Su iPhone funziona solo dopo aver aggiunto l'app alla schermata Home.
+        </p>
+      {% endif %}
+
+      {% if c.key == 'telegram' and c.configured %}
+        {% if c.linked %}
+          <button type="button" class="btn small" id="telegramUnlink">Scollega</button>
+        {% else %}
+          <button type="button" class="btn small" id="telegramBtn">Collega Telegram</button>
+          <p class="channel-note" id="telegramNote"></p>
+        {% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <h2 class="section-title">Cosa vuoi sapere</h2>
+  <p class="section-hint">
+    Ricevi al massimo un avviso al giorno, e mai lo stesso due volte di seguito.
+  </p>
+
+  <div class="event-list">
+    {% for e in event_types %}
+    <label class="event-row">
+      <span class="switch">
+        <input type="checkbox" name="event_{{ e.key }}"
+               {{ 'checked' if event_prefs.get(e.key) else '' }} />
+        <span class="switch-track"></span>
+      </span>
+      <span class="event-text">
+        <span class="event-label">{{ e.label }}</span>
+        <span class="event-desc">{{ e.description }}</span>
+      </span>
+    </label>
+    {% endfor %}
+  </div>
+
+  <div class="settings-actions">
+    <button type="submit" class="btn primary">Salva preferenze</button>
+    <button type="button" class="btn" id="testBtn">Mandami una prova</button>
+    <span id="testResult" class="test-result"></span>
+  </div>
+</form>
+
+{% if recent %}
+<h2 class="section-title">Ultime notifiche</h2>
+<div class="notif-log">
+  {% for n in recent %}
+  <div class="notif-row {{ 'failed' if not n.ok else '' }}">
+    <span class="notif-when">{{ n.sent_at.strftime('%d/%m %H:%M') }}</span>
+    <span class="notif-title">{{ n.title }}</span>
+    <span class="notif-channel">{{ n.channel }}{{ '' if n.ok else ' · non riuscita' }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h2 class="section-title">Account</h2>
+<div class="account-box">
+  <div class="account-row">
+    <span class="account-label">Email Garmin</span>
+    <span>{{ user.garmin_email }}</span>
+  </div>
+  <div class="account-row">
+    <span class="account-label">Ultima sincronizzazione</span>
+    <span>{{ user.last_sync_at.strftime('%d/%m/%Y %H:%M') if user.last_sync_at else 'mai' }}</span>
+  </div>
+  <div class="account-row">
+    <span class="account-label">Messaggi chat al giorno</span>
+    <span>{{ user.ai_quota_chat_daily }}</span>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const VAPID_PUBLIC_KEY = "{{ vapid_public_key }}";
+
+  // La chiave VAPID viaggia in base64url ma l'API push vuole un Uint8Array.
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = window.atob(base64);
+    return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
+  }
+
+  const pushBtn = document.getElementById("pushBtn");
+  const pushNote = document.getElementById("pushNote");
+
+  if (pushBtn) {
+    pushBtn.addEventListener("click", async () => {
+      pushBtn.disabled = true;
+      try {
+        if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+          pushNote.textContent = "Questo browser non supporta le notifiche push.";
+          return;
+        }
+
+        const registration = await navigator.serviceWorker.register("/static/sw.js");
+        const existing = await registration.pushManager.getSubscription();
+
+        if (existing) {
+          await fetch("/settings/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: existing.endpoint }),
+          });
+          await existing.unsubscribe();
+          pushNote.textContent = "Notifiche disattivate su questo dispositivo.";
+          setTimeout(() => location.reload(), 800);
+          return;
+        }
+
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          pushNote.textContent = "Permesso negato dal browser.";
+          return;
+        }
+
+        const subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        });
+
+        const response = await fetch("/settings/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(subscription.toJSON()),
+        });
+        pushNote.textContent = response.ok
+          ? "Fatto: le notifiche arriveranno su questo dispositivo."
+          : "Registrazione non riuscita, riprova.";
+        if (response.ok) setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        pushNote.textContent = "Errore: " + err.message;
+      } finally {
+        pushBtn.disabled = false;
+      }
+    });
+  }
+
+  const telegramBtn = document.getElementById("telegramBtn");
+  if (telegramBtn) {
+    telegramBtn.addEventListener("click", async () => {
+      const response = await fetch("/settings/telegram/link", { method: "POST" });
+      const data = await response.json();
+      document.getElementById("telegramNote").innerHTML =
+        'Apri il bot e mandagli <code>/start ' + data.code + '</code>';
+    });
+  }
+
+  const telegramUnlink = document.getElementById("telegramUnlink");
+  if (telegramUnlink) {
+    telegramUnlink.addEventListener("click", async () => {
+      await fetch("/settings/telegram/unlink", { method: "POST" });
+      location.reload();
+    });
+  }
+
+  document.getElementById("testBtn").addEventListener("click", async () => {
+    const result = document.getElementById("testResult");
+    result.textContent = "Invio…";
+    try {
+      const response = await fetch("/settings/test-notification", { method: "POST" });
+      const data = await response.json();
+      result.textContent = data.sent
+        ? `Inviata su ${data.sent} canale${data.sent > 1 ? "i" : ""}.`
+        : "Nessun canale attivo: collegane uno qui sopra.";
+    } catch (err) {
+      result.textContent = "Errore: " + err.message;
+    }
+  });
+</script>
+{% endblock %}
