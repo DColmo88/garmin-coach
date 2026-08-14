@@ -1,117 +1,127 @@
-# Garmin Connector
+# Garmin Coach
 
-Dashboard personale per monitorare i dati di **Garmin Connect** e fornirli a un modello AI
-per generare piani di allenamento.
+Coach personale sui dati di **Garmin Connect**: dashboard interpretate, chat con
+un allenatore AI che conosce i tuoi dati, obiettivi configurabili, piani di
+allenamento e notifiche.
+
+**Stato: completo e in produzione** su https://garmin.46.224.17.241.sslip.io
+440 test verdi.
 
 ## Documenti di riferimento
 
 | Documento | Cosa contiene |
 |---|---|
-| `docs/ARCHITETTURA.md` | **Catalogo sistematico dei componenti** — cosa fa ogni modulo, stato di avanzamento |
-| `docs/superpowers/specs/2026-08-14-garmin-coach-v2-multiuser-ai-design.md` | Decisioni architetturali v2 (multi-utente, chat AI, notifiche, automazione) |
-| `docs/superpowers/plans/` | Piani di implementazione task-by-task |
+| `docs/ARCHITETTURA.md` | **Catalogo sistematico dei componenti**: cosa fa ogni modulo |
+| `docs/superpowers/specs/2026-08-14-garmin-coach-v2-multiuser-ai-design.md` | Le decisioni architetturali e il perché |
 | `PRD_GarminCoach.md` | Specifiche di interfaccia e pagine |
-| `AI_COACHING_DESIGN.md` | Motori readiness/insights, gamification, training plans |
+| `AI_COACHING_DESIGN.md` | Motori readiness/insight, gamification, piani |
 
-## Cos'è stato fatto
+## Il principio che regge tutto
 
-- **Connessione Garmin**: tramite la libreria [`python-garminconnect`](https://github.com/cyberjunky/python-garminconnect) (cyberjunky). Login email/password (no MFA) con **cache del token** su disco: non si rifà il login a ogni avvio.
-- **Backend**: FastAPI che serve una **web app multi-pagina** (Jinja2 + Chart.js) e le API JSON.
-- **Database**: SQLite via **SQLAlchemy** (ORM). Per il deploy su VPS Hetzner basta cambiare `DATABASE_URL` nel `.env` (es. Postgres) senza toccare il codice.
-- **Modulo AI**: interfaccia provider-agnostica già predisposta. Attivo uno **stub** che prepara il payload strutturato; l'integrazione vera (OpenAI/Claude) si aggiunge in `app/ai/provider.py`.
-- **Docker**: `Dockerfile` + `docker-compose.yml` pronti per il deploy.
+**Il determinismo fa i numeri, l'AI fa le parole.**
 
-## Pagine (web app)
+Readiness, letture delle dashboard, trend, adattamento dei piani, XP e regole di
+notifica sono Python puro: gratis, istantanei, testabili. L'AI riceve solo
+sintesi già calcolate e produce linguaggio o pianificazione.
+
+Da qui discende il controllo dei costi (budget ~5 €/mese):
+- il system prompt della chat contiene solo lo stato di oggi, poche centinaia di token;
+- per i dati storici il modello chiama i tool in `app/ai/tools.py`, che aggregano
+  da soli (oltre 35 giorni → medie settimanali, oltre 180 → mensili);
+- il coaching giornaliero è cachato: una chiamata al giorno per utente, non una per pageview;
+- quote per utente, con consumo e spesa stimata visibili in `/admin`.
+
+Prima di aggiungere una feature, chiediti se il calcolo può stare in Python.
+Se sì, ci sta.
+
+## Accesso
+
+Le credenziali Garmin **sono** il login: bcrypt per la verifica locale (veloce,
+non contatta Garmin), copia cifrata con Fernet perché la sync notturna deve poter
+rifare il login quando il token scade.
+
+Registrazione **a invito**:
+```bash
+docker exec garmin-app python -m app.cli create-invite   # oppure dalla pagina /admin
+```
+
+## Pagine
 
 | Pagina | URL | Contenuto |
 |--------|-----|-----------|
-| Panoramica | `/` | KPI del giorno + mini-trend (passi, FC riposo, sleep score, VO₂max) |
-| Attività | `/activities` | Elenco allenamenti + distribuzione per tipo; dettaglio su `/activities/{id}` |
-| Sonno | `/sleep` | Fasi del sonno (grafico impilato), sleep score, tabella |
-| Salute | `/health` | FC, stress, Body Battery, SpO₂, respirazione, passi, intensità |
-| Corpo | `/body` | Peso, BMI, massa grassa/muscolare (richiede bilancia Garmin Index) |
-| Performance | `/performance` | VO₂max, load, HRV, readiness + record personali e race predictor (live) |
-| Dispositivi | `/devices` | Device, gear/attrezzatura, badge (live) |
-| AI Insights | `/ai` | Generazione piani/insight + guida all'integrazione LLM |
+| Coach | `/coach` | Prontezza, allenamento di oggi, insight, obiettivo, progressi |
+| Coach AI | `/chat` | Chat con tool sui dati, risposta in streaming |
+| Panoramica | `/` | KPI e grafici |
+| Attività | `/activities` | Storico, distribuzione delle intensità, dettaglio |
+| Obiettivo | `/goals` | Il "laboratorio": tipo, parametri, data target, note |
+| Piano | `/plan` | Piano generato, settimana corrente, adattamento giornaliero |
+| Sonno · Salute · Corpo · Performance | `/sleep` `/health` `/body` `/performance` | Grafici **con la lettura**: verdetto, evidenza, cosa fare |
+| Impostazioni | `/settings` | Notifiche per evento e per canale, account |
+| Amministrazione | `/admin` | Utenti, inviti, quote, spesa AI (solo admin) |
 
-## Dati salvati nel DB (time-series per i grafici)
+## Dati
 
-| Tabella | Campi principali |
-|---------|------------------|
-| `activities` | tipo, data, distanza, durata, FC, passo, dislivello, cadenza, potenza, training effect |
-| `sleep_records` | durata totale, fasi (profondo/leggero/REM), score, FC riposo, SpO₂, respirazione |
-| `training_metrics` | VO₂max (corsa/bici), training status, load, HRV, readiness |
-| `daily_wellness` | passi, FC riposo/min/max, stress, Body Battery, SpO₂, respirazione, intensità, calorie |
-| `body_composition` | peso, BMI, massa grassa/acqua/muscolare/ossea |
+Time-series salvate nel DB, tutte con `user_id` e unicità composita `(user_id, giorno)`:
+`activities`, `sleep_records`, `training_metrics`, `daily_wellness`, `body_composition`.
 
-I dati "snapshot" (dispositivi, gear, record personali, race predictor, dettaglio singola attività)
-sono letti **live** da `app/garmin/service.py` con cache in memoria (TTL 5 min).
+Tabelle applicative: `users`, `invite_codes`, `user_goals`, `training_plans`,
+`daily_coach_cache`, `gamification_state`, `chat_conversations`, `chat_messages`,
+`ai_usage_log`, `notification_log`, `push_subscriptions`.
 
-## Struttura
+I dati snapshot (dispositivi, gear, record personali) sono letti **live** da
+`app/garmin/service.py`, con cache in memoria keyed per utente (TTL 5 min).
 
-```
-app/
-├── main.py            # FastAPI: include router + endpoint sync/api/ai
-├── config.py          # carica .env
-├── templating.py      # Jinja2 + filtri di formattazione condivisi
-├── queries.py         # query DB → serie storiche per grafici/tabelle
-├── routers/
-│   └── pages.py       # tutte le pagine HTML
-├── garmin/
-│   ├── client.py      # login Garmin + cache token (singleton)
-│   ├── sync.py        # scarica e salva i time-series (parsing difensivo)
-│   └── service.py     # letture live snapshot (devices, gear, record, dettaglio attività)
-├── db/
-│   ├── database.py    # engine/session SQLAlchemy
-│   └── models.py      # Activity, SleepRecord, TrainingMetric, DailyWellness, BodyComposition
-├── ai/
-│   ├── base.py        # interfaccia astratta AIProvider
-│   ├── provider.py    # StubProvider (attivo) + OpenAIProvider (scheletro)
-│   └── context.py     # costruisce il contesto dati per l'AI
-├── templates/         # base.html + una pagina per sezione
-└── static/{style.css, app.js}   # app.js include gli helper Chart.js
-```
-
-## Endpoint API
-
-| Metodo | Path | Descrizione |
-|--------|------|-------------|
-| POST | `/sync` | Scarica i dati freschi da Garmin nel DB |
-| GET | `/api/context` | Contesto dati strutturato completo (JSON) — input per l'AI |
-| POST | `/ai/plan` | Genera un piano/insight (provider da `AI_PROVIDER`) |
-| GET | `/healthz` | Healthcheck |
-
-## Setup locale
+## Comandi
 
 ```bash
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env        # poi inserisci email/password Garmin
-uvicorn app.main:app --reload
-# apri http://localhost:8000
+# Sviluppo
+./venv/bin/uvicorn app.main:app --reload
+./venv/bin/pytest -q
+
+# Amministrazione
+python -m app.cli create-invite [--expires-days 30]
+python -m app.cli list-users
+python -m app.cli bootstrap-from-env   # crea il primo utente dalle credenziali nel .env
+python -m app.cli vapid-keys           # chiavi per le notifiche push
+python -m app.cli telegram-webhook     # URL da registrare presso Telegram
+
+# Deploy
+rsync -az --delete --exclude '.git' --exclude venv --exclude data --exclude '.env*' \
+  ./ deploy@46.224.17.241:/home/deploy/garmin-connector/
+ssh deploy@46.224.17.241 'cd /home/deploy/garmin-connector && \
+  docker compose --env-file .env.prod -p garmin -f docker-compose.prod.yml up -d --build'
 ```
 
-Primo utilizzo: apri la dashboard e premi **Sincronizza** per scaricare i dati.
+`--env-file .env.prod` è obbligatorio: Compose legge `env_file` solo per le
+variabili *dentro* il container, non per interpolare il compose stesso.
 
-## Docker
+## Se cambi i modelli
+
+Le migrazioni sono con Alembic e girano da sole all'avvio del container.
 
 ```bash
-cp .env.example .env        # compila le credenziali
-docker compose up --build
+./venv/bin/alembic revision --autogenerate -m "cosa cambia"
+./venv/bin/pytest tests/test_migrations.py   # schema e modelli devono coincidere
 ```
 
-## Prossimi passi
+**SQLite e Postgres non si comportano allo stesso modo.** Due bug sono già
+emersi solo in produzione:
 
-- Collegare il provider AI reale (OpenAI o Claude) in `app/ai/provider.py` → metodo `generate_training_plan`.
-- Sync automatica schedulata (APScheduler o cron).
-- Migrazione a Postgres per il deploy su Hetzner (servizio già predisposto in `docker-compose.yml`).
-- Migrazioni di schema con Alembic (oggi: `create_all`; se cambi i modelli, vai di Alembic o rigenera il DB).
+- `Integer` su Postgres sta in 4 byte: per gli id di Garmin serve `BigInteger`
+  (presidiato da `test_activity_id_column_is_64_bit`);
+- dopo un errore Postgres invalida l'intera transazione, quindi serve
+  `rollback()` prima di scrivere qualcos'altro nel gestore dell'eccezione.
 
 ## Note tecniche
 
-- Richiede **Python 3.11+** (la libreria garminconnect non supporta 3.9). In locale si usa un venv con 3.11.
-- Avvia **sempre** `uvicorn` dal venv (`./venv/bin/uvicorn ...` oppure dopo `source venv/bin/activate`), altrimenti l'uvicorn globale non trova le dipendenze.
-- Segreti in `.env` (gitignored). Mai committare credenziali o la cartella `data/`.
-- Il parsing delle risposte Garmin è difensivo: i campi mancanti diventano `None`/`—`, la sync e le pagine non si interrompono.
-- Lo schema oggi si crea con `Base.metadata.create_all`: **aggiungendo colonne ai modelli**, su SQLite va rigenerato il DB (`rm data/garmin_connector.db`) o introdotto Alembic.
+- Richiede **Python 3.11+**. Avvia sempre dal venv (`./venv/bin/...`).
+- Segreti in `.env` (gitignored) e `.env.prod` sul server. Mai in git.
+- Il parsing delle risposte Garmin è difensivo: i campi mancanti diventano
+  `None`/`—`, la sync e le pagine non si interrompono.
+- Ogni passo della pipeline è isolato: se la sync fallisce, coaching,
+  gamification e notifiche proseguono comunque.
+- I test non toccano mai la rete né il database reale: provider finti e
+  `SessionLocal` reindirizzato (presidiato da
+  `test_session_factory_points_at_the_test_database`).
+- L'app funziona senza chiave AI: chat e coaching narrativo si disattivano da
+  soli, tutto il resto resta deterministico.
