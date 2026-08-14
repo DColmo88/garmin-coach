@@ -60,14 +60,29 @@ def do_sync(db: Session, user: User, result: PipelineResult) -> None:
         user.sync_failures = 0
         db.commit()
     except GarminClientError as exc:
-        user.sync_failures = (user.sync_failures or 0) + 1
-        db.commit()
+        _record_sync_failure(db, user)
         result.errors.append(f"sync: {exc}")
     except Exception as exc:  # noqa: BLE001
-        user.sync_failures = (user.sync_failures or 0) + 1
-        db.commit()
+        _record_sync_failure(db, user)
         logger.exception("Sync fallita per utente %s", user.id)
         result.errors.append(f"sync: {exc}")
+
+
+def _record_sync_failure(db: Session, user: User) -> None:
+    """Incrementa il contatore dei fallimenti.
+
+    Il rollback e' obbligatorio: se l'errore veniva dal database, su Postgres
+    la transazione resta avvelenata e ogni comando successivo fallisce finche'
+    non si annulla. SQLite e' piu' permissivo, quindi il problema si vede solo
+    in produzione.
+    """
+    try:
+        db.rollback()
+        user.sync_failures = (user.sync_failures or 0) + 1
+        db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("Impossibile registrare il fallimento di sync")
+        db.rollback()
 
 
 def refresh_daily_cache(

@@ -242,3 +242,81 @@ def test_daily_job_processes_every_user(db, monkeypatch, test_db):
 
     scheduler.run_daily_job()
     assert processed == [u1.id, u2.id]
+
+
+# ============================================================================
+# Regressioni emerse solo in produzione (Postgres)
+# ============================================================================
+
+def test_activity_id_column_is_64_bit():
+    """Gli id di Garmin hanno superato i 2^31.
+
+    Su SQLite gli interi sono a 64 bit e il problema non si vede; su Postgres
+    `INTEGER` sta in 4 byte e la query esplode con «integer out of range».
+    """
+    from sqlalchemy import BigInteger
+
+    from app.db.models import Activity
+
+    column = Activity.__table__.c.garmin_activity_id
+    assert isinstance(column.type, BigInteger), (
+        "garmin_activity_id deve essere BigInteger: gli id Garmin superano i 2,1 miliardi"
+    )
+
+
+def test_a_real_garmin_id_fits(db):
+    """Un id realistico (oltre 2^31) deve poter essere salvato e riletto."""
+    from app.db.models import Activity, User
+
+    user = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    db.add(user)
+    db.commit()
+
+    big_id = 21_474_836_470  # dieci volte il limite di INTEGER
+    db.add(Activity(user_id=user.id, garmin_activity_id=big_id, activity_type="running"))
+    db.commit()
+
+    from app import queries as q
+
+    assert q.get_activity(db, user.id, big_id) is not None
+
+
+def test_sync_failure_rolls_back_before_writing(db, user, monkeypatch):
+    """Se l'errore veniva dal database, senza rollback il commit successivo
+    fallisce a sua volta: su Postgres la transazione resta avvelenata."""
+    from app import pipeline
+
+    rolled_back = []
+    original_rollback = db.rollback
+
+    def tracking_rollback():
+        rolled_back.append(True)
+        original_rollback()
+
+    monkeypatch.setattr(db, "rollback", tracking_rollback)
+
+    def database_error(d, u):
+        raise RuntimeError("current transaction is aborted")
+
+    monkeypatch.setattr(pipeline, "sync_all", database_error)
+
+    result = pipeline.PipelineResult(user_id=user.id)
+    pipeline.do_sync(db, user, result)
+
+    assert rolled_back, "il rollback deve precedere la scrittura del contatore"
+    assert user.sync_failures == 1
+    assert len(result.errors) == 1
+
+
+def test_failure_counter_survives_a_broken_session(db, user, monkeypatch):
+    """Anche se registrare il fallimento non riesce, la pipeline non esplode."""
+    from app import pipeline
+
+    monkeypatch.setattr(pipeline, "sync_all",
+                        lambda d, u: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(db, "commit",
+                        lambda: (_ for _ in ()).throw(RuntimeError("sessione rotta")))
+
+    result = pipeline.PipelineResult(user_id=user.id)
+    pipeline.do_sync(db, user, result)  # non solleva
+    assert result.errors

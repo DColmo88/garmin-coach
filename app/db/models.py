@@ -18,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -107,7 +108,9 @@ class Activity(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    garmin_activity_id: Mapped[int] = mapped_column(Integer, index=True)
+    # BigInteger: gli id di Garmin hanno superato i 2^31, che su Postgres
+    # e' il limite di INTEGER. Su SQLite non si notava (interi a 64 bit).
+    garmin_activity_id: Mapped[int] = mapped_column(BigInteger, index=True)
     name: Mapped[str | None] = mapped_column(String, nullable=True)
     activity_type: Mapped[str | None] = mapped_column(String, nullable=True)
     start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
