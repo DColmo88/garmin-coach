@@ -36,7 +36,7 @@ class Settings:
     # AI
     AI_PROVIDER: str = os.getenv("AI_PROVIDER", "stub")
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
-    CLAUDE_MODEL_LIGHT: str = os.getenv("CLAUDE_MODEL_LIGHT", "claude-haiku-4-5-20251001")
+    CLAUDE_MODEL_LIGHT: str = os.getenv("CLAUDE_MODEL_LIGHT", "claude-haiku-4-5")
     CLAUDE_MODEL_HEAVY: str = os.getenv("CLAUDE_MODEL_HEAVY", "claude-sonnet-5")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")

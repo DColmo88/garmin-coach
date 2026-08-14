@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import queries as q
+from app.ai import usage
 from app.ai.insights import top_insights
 from app.ai.provider import get_provider
 from app.ai.readiness import compute_readiness
@@ -67,18 +68,20 @@ def do_sync(db: Session, user: User, result: PipelineResult) -> None:
         result.errors.append(f"sync: {exc}")
 
 
-def refresh_daily_cache(db: Session, user: User, day: date | None = None) -> DailyCoachCache:
+def refresh_daily_cache(
+    db: Session, user: User, day: date | None = None, force_ai: bool = False
+) -> DailyCoachCache:
     """Ricalcola readiness e insight del giorno e li salva in cache.
 
-    Deterministico e gratuito: il messaggio narrativo dell'AI (fase 4) si
-    innesta su questa stessa riga, sostituendo `coach_message` e `source`.
+    Readiness e insight sono deterministici: si ricalcolano sempre, non costano
+    nulla. Il messaggio del coach passa dall'AI **una sola volta al giorno** —
+    se la riga di oggi è già stata scritta dall'AI non si richiama il modello.
     """
     day = day or date.today()
     snap = q.coach_snapshot(db, user.id)
     readiness = compute_readiness(snap)
     insights = top_insights(snap, 3)
     goal = active_goal(db, user.id)
-    coaching = get_provider().coach(snap, readiness, goal)
 
     row = db.scalar(
         select(DailyCoachCache).where(
@@ -89,22 +92,35 @@ def refresh_daily_cache(db: Session, user: User, day: date | None = None) -> Dai
     if is_new:
         row = DailyCoachCache(user_id=user.id, day=day)
 
+    # L'AI parla una volta al giorno: se ha già scritto, si riusa il testo.
+    already_written_by_ai = row.source == "ai" and not force_ai
+    provider = get_provider()
+    coaching = provider.coach(snap, readiness, goal) if not already_written_by_ai else None
+
     row.readiness_score = readiness.score
     row.readiness_label = readiness.label
     row.insights_json = [
         {"icon": i.icon, "title": i.title, "text": i.text, "color": i.color} for i in insights
     ]
-    # Il messaggio deterministico resta se l'AI non è ancora intervenuta.
-    if row.source != "ai":
+
+    if coaching is not None:
         row.coach_message = coaching.message
-        row.source = "deterministic"
-    row.workout_json = {
-        "icon": coaching.workout.icon,
-        "type": coaching.workout.type,
-        "duration": coaching.workout.duration,
-        "hr_zone": coaching.workout.hr_zone,
-        "note": coaching.workout.note,
-    }
+        row.source = coaching.source
+        row.workout_json = {
+            "icon": coaching.workout.icon,
+            "type": coaching.workout.type,
+            "duration": coaching.workout.duration,
+            "hr_zone": coaching.workout.hr_zone,
+            "note": coaching.workout.note,
+        }
+        if coaching.source == "ai" and (coaching.tokens_in or coaching.tokens_out):
+            usage.record(
+                db, user.id, "coach",
+                model=coaching.model,
+                tokens_in=coaching.tokens_in,
+                tokens_out=coaching.tokens_out,
+            )
+
     row.generated_at = datetime.utcnow()
 
     if is_new:

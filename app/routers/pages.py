@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import goals
 from app import queries as q
-from app.ai.insights import top_insights
+from app.ai.insights import Insight
 from app.ai.provider import get_provider
 from app.ai.readiness import compute_readiness
 from app.auth.session import require_user
@@ -17,6 +18,7 @@ from app.db.database import get_session
 from app.db.models import User
 from app.garmin import service
 from app.garmin.client import GarminClientError
+from app.pipeline import refresh_daily_cache
 from app.templating import templates
 
 router = APIRouter()
@@ -42,9 +44,26 @@ def coach(request: Request, db: Session = Depends(get_session),
           user: User = Depends(require_user)):
     snap = q.coach_snapshot(db, user.id)
     readiness = compute_readiness(snap)
-    insights = top_insights(snap, 3)
     goal = goals.active_goal(db, user.id)
-    coaching = get_provider().coach(snap, readiness, goal)
+
+    # Il messaggio del coach arriva dalla cache del giorno: aprire la pagina
+    # dieci volte non deve costare dieci chiamate all'AI.
+    cached = refresh_daily_cache(db, user)
+    insights = [
+        Insight(i["icon"], i["title"], i["text"], i["color"], 0)
+        for i in (cached.insights_json or [])
+    ]
+    workout = cached.workout_json or {}
+    coaching = SimpleNamespace(
+        message=cached.coach_message or readiness.recommendation,
+        workout=SimpleNamespace(
+            icon=workout.get("icon", "—"),
+            type=workout.get("type", "—"),
+            duration=workout.get("duration", "—"),
+            hr_zone=workout.get("hr_zone", "—"),
+            note=workout.get("note", ""),
+        ),
+    )
 
     def _r(v):
         return round(v) if v is not None else None

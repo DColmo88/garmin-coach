@@ -23,8 +23,19 @@ class WorkoutSuggestion:
 
 @dataclass
 class CoachOutput:
+    """Messaggio del giorno + allenamento suggerito.
+
+    L'allenamento è sempre deterministico. Il messaggio può essere riscritto
+    da un provider AI, che in quel caso valorizza `source="ai"` e i token
+    consumati (servono al log dei costi).
+    """
+
     message: str
     workout: WorkoutSuggestion
+    source: str = "deterministic"
+    tokens_in: int = 0
+    tokens_out: int = 0
+    model: str | None = None
 
 
 _WORKOUTS = {
