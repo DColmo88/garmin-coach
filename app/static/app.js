@@ -33,6 +33,41 @@ if (syncBtn) {
   });
 }
 
+// ---------------- Stato sync in sidebar ----------------
+function relativeTime(iso) {
+  if (!iso) return "mai";
+  const diffMin = Math.round((Date.now() - new Date(iso + "Z").getTime()) / 60000);
+  if (diffMin < 1) return "adesso";
+  if (diffMin < 60) return `${diffMin} min fa`;
+  const h = Math.round(diffMin / 60);
+  if (h < 24) return `${h} ${h === 1 ? "ora" : "ore"} fa`;
+  const d = Math.round(h / 24);
+  return `${d} ${d === 1 ? "giorno" : "giorni"} fa`;
+}
+
+async function refreshSyncStatus() {
+  const el = document.getElementById("syncStatus");
+  if (!el) return;
+  try {
+    const res = await fetch("/api/sync-status");
+    if (!res.ok) return;
+    const data = await res.json();
+    let text = `Ultima sync: ${relativeTime(data.last_sync_at)}`;
+    if (data.sync_failures > 0) {
+      text += ` · ${data.sync_failures} tentativi falliti`;
+      el.classList.add("warn");
+    } else {
+      el.classList.remove("warn");
+    }
+    el.textContent = text;
+    if (data.next_scheduled_sync) {
+      const next = new Date(data.next_scheduled_sync);
+      el.title = "Prossima sync automatica: " + next.toLocaleString("it-IT");
+    }
+  } catch (e) { /* la sidebar non deve rompersi se l'endpoint non risponde */ }
+}
+refreshSyncStatus();
+
 // ---------------- Chart.js defaults ----------------
 if (window.Chart) {
   Chart.defaults.color = "#8b949e";

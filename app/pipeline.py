@@ -1,0 +1,159 @@
+"""Pipeline giornaliera: cosa succede dopo che i dati sono arrivati da Garmin.
+
+    sync → readiness + insights → coaching → notifiche
+
+Ogni passo è isolato: se uno fallisce, gli altri proseguono e l'errore finisce
+nel risultato. Serve sia allo scheduler notturno sia al bottone "Sincronizza".
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app import queries as q
+from app.ai.insights import top_insights
+from app.ai.readiness import compute_readiness
+from app.db.models import DailyCoachCache, User
+from app.garmin import service
+from app.garmin.client import GarminClientError
+from app.garmin.sync import sync_all
+
+logger = logging.getLogger(__name__)
+
+MAX_SYNC_FAILURES_BEFORE_ALERT = 3
+
+
+@dataclass
+class PipelineResult:
+    """Esito della pipeline per un utente."""
+
+    user_id: int
+    synced: dict[str, int] | None = None
+    readiness: int | None = None
+    insights: int = 0
+    notifications: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+
+# --------------------------- passi ---------------------------
+
+def do_sync(db: Session, user: User, result: PipelineResult) -> None:
+    """Scarica i dati da Garmin e aggiorna lo stato di sync dell'utente."""
+    try:
+        result.synced = sync_all(db, user)
+        service.clear_cache(user.id)
+        user.last_sync_at = datetime.utcnow()
+        user.sync_failures = 0
+        db.commit()
+    except GarminClientError as exc:
+        user.sync_failures = (user.sync_failures or 0) + 1
+        db.commit()
+        result.errors.append(f"sync: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        user.sync_failures = (user.sync_failures or 0) + 1
+        db.commit()
+        logger.exception("Sync fallita per utente %s", user.id)
+        result.errors.append(f"sync: {exc}")
+
+
+def refresh_daily_cache(db: Session, user: User, day: date | None = None) -> DailyCoachCache:
+    """Ricalcola readiness e insight del giorno e li salva in cache.
+
+    Deterministico e gratuito: il messaggio narrativo dell'AI (fase 4) si
+    innesta su questa stessa riga, sostituendo `coach_message` e `source`.
+    """
+    day = day or date.today()
+    snap = q.coach_snapshot(db, user.id)
+    readiness = compute_readiness(snap)
+    insights = top_insights(snap, 3)
+
+    row = db.scalar(
+        select(DailyCoachCache).where(
+            DailyCoachCache.user_id == user.id, DailyCoachCache.day == day
+        )
+    )
+    is_new = row is None
+    if is_new:
+        row = DailyCoachCache(user_id=user.id, day=day)
+
+    row.readiness_score = readiness.score
+    row.readiness_label = readiness.label
+    row.insights_json = [
+        {"icon": i.icon, "title": i.title, "text": i.text, "color": i.color} for i in insights
+    ]
+    # Il messaggio deterministico resta se l'AI non è ancora intervenuta.
+    if row.source != "ai":
+        row.coach_message = readiness.recommendation
+        row.source = "deterministic"
+    row.generated_at = datetime.utcnow()
+
+    if is_new:
+        db.add(row)
+    db.commit()
+    return row
+
+
+def do_coaching(db: Session, user: User, result: PipelineResult) -> None:
+    """Aggiorna readiness/insight, e il messaggio AI quando è configurato."""
+    try:
+        row = refresh_daily_cache(db, user)
+        result.readiness = int(row.readiness_score) if row.readiness_score is not None else None
+        result.insights = len(row.insights_json or [])
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Coaching fallito per utente %s", user.id)
+        result.errors.append(f"coaching: {exc}")
+
+
+def do_notifications(db: Session, user: User, result: PipelineResult) -> None:
+    """Valuta le regole di notifica e invia sui canali scelti dall'utente."""
+    try:
+        from app.notifications.dispatcher import dispatch_for_user
+
+        result.notifications = dispatch_for_user(db, user)
+    except ModuleNotFoundError:
+        pass  # canale notifiche non ancora installato
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Notifiche fallite per utente %s", user.id)
+        result.errors.append(f"notifiche: {exc}")
+
+
+# --------------------------- orchestrazione ---------------------------
+
+def run_for_user(db: Session, user: User, *, with_sync: bool = True) -> PipelineResult:
+    """Esegue la pipeline completa per un utente."""
+    result = PipelineResult(user_id=user.id)
+    if with_sync:
+        do_sync(db, user, result)
+    do_coaching(db, user, result)
+    do_notifications(db, user, result)
+    logger.info(
+        "Pipeline utente %s: sync=%s readiness=%s insight=%s notifiche=%s errori=%s",
+        user.id, result.synced, result.readiness, result.insights,
+        result.notifications, result.errors or "nessuno",
+    )
+    return result
+
+
+def active_users(db: Session) -> list[User]:
+    return list(db.scalars(select(User).where(User.is_active.is_(True)).order_by(User.id)).all())
+
+
+def run_for_all(db: Session) -> list[PipelineResult]:
+    """Pipeline per tutti gli utenti attivi. Un errore su uno non blocca gli altri."""
+    results = []
+    for user in active_users(db):
+        try:
+            results.append(run_for_user(db, user))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Pipeline interrotta per utente %s", user.id)
+            results.append(PipelineResult(user_id=user.id, errors=[str(exc)]))
+    return results

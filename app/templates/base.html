@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{% block title %}Garmin Connector{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -28,6 +28,7 @@
     </nav>
     <div class="sidebar-foot">
       <span class="status ok">● Garmin collegato</span>
+      <div id="syncStatus" class="sync-status">Ultima sync: —</div>
       {% if user %}
       <div class="sidebar-user">
         <span class="sidebar-user-name">{{ user.display_name or user.garmin_email }}</span>
@@ -48,7 +49,7 @@
   </div>
 
   <div id="syncToast" class="toast"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ static_v }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

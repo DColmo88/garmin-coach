@@ -12,6 +12,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 
+@pytest.fixture(autouse=True)
+def no_background_scheduler(monkeypatch):
+    """Lo scheduler reale non deve mai partire durante i test."""
+    monkeypatch.setattr("app.config.settings.SCHEDULER_ENABLED", False)
+
+
 @pytest.fixture()
 def test_db(monkeypatch, tmp_path):
     """Engine + sessionmaker su un DB temporaneo, con le tabelle già create."""

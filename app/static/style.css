@@ -273,3 +273,7 @@ ul.kv .k { color: var(--muted); }
   color: var(--muted); font-size: 12.5px; text-decoration: underline;
 }
 .linkbtn:hover { color: var(--text); }
+.sync-status {
+  margin-top: 6px; font-size: 11.5px; color: var(--muted); cursor: default;
+}
+.sync-status.warn { color: var(--amber); }

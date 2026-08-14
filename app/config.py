@@ -26,6 +26,13 @@ class Settings:
     SESSION_SECRET: str = os.getenv("SESSION_SECRET", "dev-only-change-me")
     FERNET_KEY: str = os.getenv("FERNET_KEY", "")
 
+    # Scheduler (sync automatica giornaliera)
+    SCHEDULER_ENABLED: bool = os.getenv("SCHEDULER_ENABLED", "true").lower() == "true"
+    SCHEDULER_TIMEZONE: str = os.getenv("SCHEDULER_TIMEZONE", "Europe/Rome")
+    SYNC_HOUR: int = int(os.getenv("SYNC_HOUR", "6"))
+    SYNC_MINUTE: int = int(os.getenv("SYNC_MINUTE", "30"))
+    SYNC_STAGGER_MINUTES: int = int(os.getenv("SYNC_STAGGER_MINUTES", "3"))
+
     # AI
     AI_PROVIDER: str = os.getenv("AI_PROVIDER", "stub")
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")

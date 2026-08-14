@@ -6,7 +6,24 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+
+def _static_version() -> str:
+    """Impronta degli asset statici, per invalidare la cache dei browser.
+
+    Senza questo, dopo un deploy i browser continuano a servire il CSS e il JS
+    vecchi finché non si fa un hard refresh.
+    """
+    try:
+        newest = max(f.stat().st_mtime for f in STATIC_DIR.glob("*") if f.is_file())
+        return str(int(newest))
+    except (OSError, ValueError):
+        return "0"
+
+
+templates.env.globals["static_v"] = _static_version()
 
 
 def _num(value) -> float | None:
