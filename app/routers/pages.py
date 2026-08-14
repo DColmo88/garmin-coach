@@ -1,10 +1,13 @@
 """Router delle pagine HTML della dashboard."""
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
+from app import goals
 from app import queries as q
 from app.ai.insights import top_insights
 from app.ai.provider import get_provider
@@ -40,7 +43,9 @@ def coach(request: Request, db: Session = Depends(get_session),
     snap = q.coach_snapshot(db, user.id)
     readiness = compute_readiness(snap)
     insights = top_insights(snap, 3)
-    coaching = get_provider().coach(snap, readiness)
+    goal = goals.active_goal(db, user.id)
+    coaching = get_provider().coach(snap, readiness, goal)
+
     def _r(v):
         return round(v) if v is not None else None
 
@@ -54,6 +59,7 @@ def coach(request: Request, db: Session = Depends(get_session),
         "coach.html",
         _ctx(request, "coach", user, snap=snap, readiness=readiness, insights=insights,
              coaching=coaching, mini=mini, in_range=in_range,
+             goal=goal, days_left=goals.days_to_target(goal) if goal else None,
              total_metrics=len(readiness.breakdown)),
     )
 
@@ -245,6 +251,65 @@ def devices(request: Request, user: User = Depends(require_user)):
         "devices.html",
         _ctx(request, "devices", user, data=data, error=error),
     )
+
+
+# --------------------------- Obiettivi ---------------------------
+
+@router.get("/goals", response_class=HTMLResponse)
+def goals_page(request: Request, db: Session = Depends(get_session),
+               user: User = Depends(require_user), saved: str = ""):
+    current = goals.active_goal(db, user.id)
+    return templates.TemplateResponse(
+        "goals.html",
+        _ctx(request, "goals", user,
+             goal_types=goals.GOAL_TYPES,
+             current=current,
+             current_type=goals.get_goal_type(current.goal_type) if current else None,
+             days_left=goals.days_to_target(current) if current else None,
+             past=goals.past_goals(db, user.id),
+             saved=bool(saved)),
+    )
+
+
+@router.post("/goals")
+async def goals_save(request: Request, db: Session = Depends(get_session),
+                     user: User = Depends(require_user)):
+    """Salva l'obiettivo attivo. I parametri variano per tipo, quindi si legge
+    il form grezzo invece di dichiarare un campo per ognuno."""
+    form = await request.form()
+    goal_type_key = str(form.get("goal_type") or "")
+
+    raw_date = str(form.get("target_date") or "").strip()
+    target_date = None
+    if raw_date:
+        try:
+            target_date = date.fromisoformat(raw_date)
+        except ValueError:
+            target_date = None
+
+    # I campi dei parametri sono prefissati con "p_" per non confondersi
+    # con title/target_date/priority_notes.
+    params = {k[2:]: v for k, v in form.items() if k.startswith("p_")}
+
+    try:
+        goals.set_active_goal(
+            db, user, goal_type_key,
+            title=str(form.get("title") or ""),
+            target_date=target_date,
+            params=params,
+            priority_notes=str(form.get("priority_notes") or ""),
+        )
+    except ValueError:
+        return RedirectResponse("/goals", status_code=303)
+    return RedirectResponse("/goals?saved=1", status_code=303)
+
+
+@router.post("/goals/close")
+async def goals_close(request: Request, db: Session = Depends(get_session),
+                      user: User = Depends(require_user)):
+    form = await request.form()
+    goals.close_goal(db, user.id, outcome=str(form.get("outcome") or ""))
+    return RedirectResponse("/goals", status_code=303)
 
 
 # --------------------------- AI ---------------------------

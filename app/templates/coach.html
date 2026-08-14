@@ -20,6 +20,26 @@
   </div>
 </section>
 
+{% if goal %}
+<a href="/goals" class="coach-goal">
+  <span class="coach-goal-label">Obiettivo</span>
+  <span class="coach-goal-title">{{ goal.title }}</span>
+  {% if days_left is not none %}
+    <span class="coach-goal-days {{ 'urgent' if 0 <= days_left <= 14 else '' }}">
+      {% if days_left > 1 %}tra {{ days_left }} giorni
+      {% elif days_left == 1 %}domani
+      {% elif days_left == 0 %}è oggi
+      {% else %}data superata{% endif %}
+    </span>
+  {% endif %}
+</a>
+{% else %}
+<a href="/goals" class="coach-goal empty">
+  <span class="coach-goal-label">Obiettivo</span>
+  <span class="coach-goal-title">Impostane uno per consigli mirati →</span>
+</a>
+{% endif %}
+
 <div class="ring-mini-row">
   {% for m in mini %}
     {{ ring(m.value, m.vmax | default(100), m.label, "", 96) }}

@@ -31,13 +31,18 @@ def _color(v: int) -> str:
 
 
 def _hrv_factor(status: str | None) -> int:
+    """Garmin usa BALANCED / UNBALANCED / LOW / POOR.
+
+    I casi negativi vanno controllati per primi: "unbalanced" contiene
+    "balanc", quindi l'ordine inverso premierebbe un HRV sbilanciato.
+    """
     if not status:
         return 65
     s = status.lower()
+    if "unbalanc" in s or "low" in s or "poor" in s:
+        return 40
     if "balanc" in s or "good" in s:
         return 100
-    if "low" in s or "unbalanc" in s or "poor" in s:
-        return 40
     return 65
 
 

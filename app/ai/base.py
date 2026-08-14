@@ -31,11 +31,12 @@ class AIProvider(ABC):
         """Nome leggibile del provider."""
         raise NotImplementedError
 
-    def coach(self, snap: dict, readiness):  # type: ignore[no-untyped-def]
+    def coach(self, snap: dict, readiness, goal=None):  # type: ignore[no-untyped-def]
         """Coaching del giorno. Default: template deterministici (no rete).
 
         Un provider AI reale può fare override per generare prosa con un LLM.
+        `goal` è l'obiettivo attivo dell'utente (UserGoal) o None.
         """
         from app.ai.coaching import build_coach_output
 
-        return build_coach_output(snap, readiness)
+        return build_coach_output(snap, readiness, goal)

@@ -35,3 +35,26 @@ def test_hrv_missing_uses_neutral_default():
     snap["hrv_status"] = None
     hrv_factor = next(f for f in compute_readiness(snap).breakdown if f.name == "HRV")
     assert hrv_factor.value == 65
+
+
+def test_unbalanced_hrv_is_penalised_not_rewarded():
+    """"unbalanced" contiene "balanc": l'ordine dei controlli conta."""
+    from app.ai.readiness import _hrv_factor
+
+    assert _hrv_factor("UNBALANCED") == 40
+    assert _hrv_factor("BALANCED") == 100
+    assert _hrv_factor("LOW") == 40
+    assert _hrv_factor("POOR") == 40
+    assert _hrv_factor(None) == 65
+    assert _hrv_factor("SCONOSCIUTO") == 65
+
+
+def test_unbalanced_hrv_lowers_the_score():
+    from app.ai.readiness import compute_readiness
+
+    base = {"sleep_score": 40, "body_battery_high": 25, "load_ratio": 1.6,
+            "resting_hr_7d_avg": 60, "resting_hr_30d_avg": 55}
+    balanced = compute_readiness({**base, "hrv_status": "BALANCED"})
+    unbalanced = compute_readiness({**base, "hrv_status": "UNBALANCED"})
+    assert unbalanced.score < balanced.score
+    assert unbalanced.label == "Stanco"

@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.ai.readiness import ReadinessResult
+from app.db.models import UserGoal
+from app.goals import days_to_target
 
 
 @dataclass
@@ -46,7 +48,29 @@ _NO_DATA = WorkoutSuggestion("—", "—", "—", "—",
                              "Sincronizza i dati per ricevere un suggerimento.")
 
 
-def _message(snap: dict, r: ReadinessResult) -> str:
+def _goal_line(goal: UserGoal | None, readiness: ReadinessResult) -> str:
+    """Una frase che lega la giornata all'obiettivo, quando ce n'è uno."""
+    if goal is None:
+        return ""
+
+    days = days_to_target(goal)
+    if days is None:
+        return f"Obiettivo: {goal.title}."
+
+    if days < 0:
+        return f"La data di «{goal.title}» è passata: aggiorna l'obiettivo."
+    if days == 0:
+        return f"Oggi è il giorno di «{goal.title}». In bocca al lupo."
+    if days <= 7:
+        return (f"«{goal.title}» tra {days} giorni: settimana di scarico, "
+                "niente carichi nuovi.")
+    if days <= 21 and readiness.label in ("Stanco", "Riposo"):
+        return (f"Mancano {days} giorni a «{goal.title}» e la prontezza è bassa: "
+                "meglio recuperare adesso che arrivare cotto.")
+    return f"«{goal.title}» tra {days} giorni."
+
+
+def _message(snap: dict, r: ReadinessResult, goal: UserGoal | None = None) -> str:
     if r.score is None:
         return ("Non ho ancora abbastanza dati. Premi Sincronizza per scaricare "
                 "le tue metriche Garmin e ricevere il coaching di oggi.")
@@ -61,10 +85,15 @@ def _message(snap: dict, r: ReadinessResult) -> str:
     if bb is not None:
         parts.append(f"Body Battery a {round(bb)}")
     detail = ", ".join(parts) if parts else "Ecco il quadro di oggi"
-    return (f"Prontezza {r.score}/100 — {r.emoji} {r.label}. "
-            f"{detail}. {r.recommendation}.")
+
+    message = (f"Prontezza {r.score}/100 — {r.emoji} {r.label}. "
+               f"{detail}. {r.recommendation}.")
+    goal_line = _goal_line(goal, r)
+    return f"{message} {goal_line}".strip()
 
 
-def build_coach_output(snap: dict, readiness: ReadinessResult) -> CoachOutput:
+def build_coach_output(
+    snap: dict, readiness: ReadinessResult, goal: UserGoal | None = None
+) -> CoachOutput:
     workout = _NO_DATA if readiness.score is None else _WORKOUTS[readiness.label]
-    return CoachOutput(message=_message(snap, readiness), workout=workout)
+    return CoachOutput(message=_message(snap, readiness, goal), workout=workout)

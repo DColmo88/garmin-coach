@@ -17,8 +17,10 @@ from sqlalchemy.orm import Session
 
 from app import queries as q
 from app.ai.insights import top_insights
+from app.ai.provider import get_provider
 from app.ai.readiness import compute_readiness
 from app.db.models import DailyCoachCache, User
+from app.goals import active_goal
 from app.garmin import service
 from app.garmin.client import GarminClientError
 from app.garmin.sync import sync_all
@@ -75,6 +77,8 @@ def refresh_daily_cache(db: Session, user: User, day: date | None = None) -> Dai
     snap = q.coach_snapshot(db, user.id)
     readiness = compute_readiness(snap)
     insights = top_insights(snap, 3)
+    goal = active_goal(db, user.id)
+    coaching = get_provider().coach(snap, readiness, goal)
 
     row = db.scalar(
         select(DailyCoachCache).where(
@@ -92,8 +96,15 @@ def refresh_daily_cache(db: Session, user: User, day: date | None = None) -> Dai
     ]
     # Il messaggio deterministico resta se l'AI non è ancora intervenuta.
     if row.source != "ai":
-        row.coach_message = readiness.recommendation
+        row.coach_message = coaching.message
         row.source = "deterministic"
+    row.workout_json = {
+        "icon": coaching.workout.icon,
+        "type": coaching.workout.type,
+        "duration": coaching.workout.duration,
+        "hr_zone": coaching.workout.hr_zone,
+        "note": coaching.workout.note,
+    }
     row.generated_at = datetime.utcnow()
 
     if is_new:

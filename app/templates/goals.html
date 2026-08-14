@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Obiettivo · Garmin Coach{% endblock %}
+{% block heading %}Obiettivo{% endblock %}
+
+{% block content %}
+
+{% if saved %}
+  <div class="banner ok">✅ Obiettivo aggiornato. Da ora il coach ragiona su questo.</div>
+{% endif %}
+
+{% if current %}
+<section class="goal-active">
+  <div class="goal-active-head">
+    <div>
+      <div class="goal-eyebrow">Obiettivo attivo</div>
+      <h2>{{ current_type.icon if current_type else '🎯' }} {{ current.title }}</h2>
+    </div>
+    {% if days_left is not none %}
+      <div class="goal-countdown {{ 'urgent' if days_left <= 14 and days_left >= 0 else '' }}">
+        <div class="goal-countdown-num">{{ days_left if days_left >= 0 else '—' }}</div>
+        <div class="goal-countdown-label">
+          {{ 'giorni al traguardo' if days_left > 1 else ('è oggi!' if days_left == 0 else ('domani' if days_left == 1 else 'data superata')) }}
+        </div>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if current.params_json %}
+  <div class="goal-params">
+    {% for key, value in current.params_json.items() %}
+      {% set param = (current_type.params | selectattr('key', 'equalto', key) | first) if current_type else none %}
+      <div class="goal-param">
+        <span class="goal-param-label">{{ param.label if param else key }}</span>
+        <span class="goal-param-value">
+          {{ value if value is string else value | num(value is float and value % 1 and 1 or 0) }}{{ ' ' ~ param.unit if param and param.unit else '' }}
+        </span>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if current.priority_notes %}
+    <p class="goal-notes">💬 {{ current.priority_notes }}</p>
+  {% endif %}
+
+  <form method="post" action="/goals/close" class="goal-close">
+    <input type="text" name="outcome" placeholder="Com'è andata? (facoltativo)" />
+    <button type="submit" class="btn">Archivia obiettivo</button>
+  </form>
+</section>
+{% else %}
+  <div class="banner">🎯 Non hai ancora un obiettivo. Sceglierne uno rende ogni consiglio del coach mirato invece che generico.</div>
+{% endif %}
+
+<h2 class="section-title">{{ 'Cambia obiettivo' if current else 'Scegli il tuo obiettivo' }}</h2>
+
+<form method="post" action="/goals" id="goalForm">
+  <div class="goal-grid">
+    {% for gt in goal_types %}
+    <label class="goal-card" data-type="{{ gt.key }}">
+      <input type="radio" name="goal_type" value="{{ gt.key }}"
+             {{ 'checked' if current and current.goal_type == gt.key else '' }} required />
+      <span class="goal-card-icon">{{ gt.icon }}</span>
+      <span class="goal-card-title">{{ gt.title }}</span>
+      <span class="goal-card-sub">{{ gt.subtitle }}</span>
+    </label>
+    {% endfor %}
+  </div>
+
+  {% for gt in goal_types %}
+  <fieldset class="goal-fields" id="fields-{{ gt.key }}" hidden>
+    <legend>{{ gt.icon }} {{ gt.title }}</legend>
+
+    <div class="goal-fields-grid">
+      <div class="field">
+        <label for="title-{{ gt.key }}">Come lo chiami</label>
+        <input id="title-{{ gt.key }}" type="text" name="title" disabled
+               placeholder="{{ gt.title }}"
+               value="{{ current.title if current and current.goal_type == gt.key and current.title != gt.title else '' }}" />
+      </div>
+
+      {% if gt.wants_target_date %}
+      <div class="field">
+        <label for="date-{{ gt.key }}">{{ gt.date_label }}</label>
+        <input id="date-{{ gt.key }}" type="date" name="target_date" disabled
+               value="{{ current.target_date.isoformat() if current and current.goal_type == gt.key and current.target_date else '' }}" />
+      </div>
+      {% endif %}
+
+      {% for p in gt.params %}
+      {% set existing = (current.params_json or {}).get(p.key) if current and current.goal_type == gt.key else none %}
+      <div class="field">
+        <label for="{{ gt.key }}-{{ p.key }}">
+          {{ p.label }}{% if p.unit %} <span class="unit">({{ p.unit }})</span>{% endif %}
+        </label>
+        {% if p.kind == 'select' %}
+          <select id="{{ gt.key }}-{{ p.key }}" name="p_{{ p.key }}" disabled>
+            <option value="">—</option>
+            {% for opt in p.options %}
+              <option value="{{ opt }}" {{ 'selected' if existing == opt else '' }}>{{ opt }}</option>
+            {% endfor %}
+          </select>
+        {% else %}
+          <input id="{{ gt.key }}-{{ p.key }}" name="p_{{ p.key }}" disabled
+                 type="{{ 'number' if p.kind == 'number' else ('time' if p.kind == 'time' else 'text') }}"
+                 {{ 'step=any' if p.kind == 'number' else '' }}
+                 placeholder="{{ p.placeholder or '' }}"
+                 value="{{ existing if existing is not none else '' }}" />
+        {% endif %}
+        {% if p.help %}<span class="field-help">{{ p.help }}</span>{% endif %}
+      </div>
+      {% endfor %}
+
+      <div class="field field-wide">
+        <label for="notes-{{ gt.key }}">Note per il coach</label>
+        <input id="notes-{{ gt.key }}" type="text" name="priority_notes" disabled
+               placeholder="es. ginocchio delicato, niente allenamenti il lunedì"
+               value="{{ current.priority_notes if current and current.goal_type == gt.key and current.priority_notes else '' }}" />
+        <span class="field-help">Vincoli e preferenze che il coach deve tenere presenti.</span>
+      </div>
+    </div>
+  </fieldset>
+  {% endfor %}
+
+  <button type="submit" class="btn primary goal-submit">Salva obiettivo</button>
+</form>
+
+{% if past %}
+<h2 class="section-title">Obiettivi passati</h2>
+<div class="goal-past">
+  {% for g in past %}
+  <div class="goal-past-row">
+    <span class="goal-past-title">{{ g.title }}</span>
+    <span class="goal-past-date">
+      {{ g.closed_at.strftime('%d/%m/%Y') if g.closed_at else '' }}
+    </span>
+    {% if g.outcome %}<span class="goal-past-outcome">{{ g.outcome }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Mostra solo i campi del tipo selezionato, e disabilita gli altri
+  // così il browser non invia i campi delle schede nascoste.
+  const form = document.getElementById("goalForm");
+  function syncFields() {
+    const selected = form.querySelector('input[name="goal_type"]:checked');
+    form.querySelectorAll(".goal-fields").forEach((fs) => {
+      const isActive = selected && fs.id === "fields-" + selected.value;
+      fs.hidden = !isActive;
+      fs.querySelectorAll("input, select").forEach((el) => { el.disabled = !isActive; });
+    });
+    form.querySelectorAll(".goal-card").forEach((card) => {
+      card.classList.toggle("selected", selected && card.dataset.type === selected.value);
+    });
+  }
+  form.querySelectorAll('input[name="goal_type"]').forEach((radio) =>
+    radio.addEventListener("change", syncFields)
+  );
+  syncFields();
+</script>
+{% endblock %}
