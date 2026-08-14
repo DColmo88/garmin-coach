@@ -21,3 +21,32 @@
   {% if sublabel %}<div class="ring-sub">{{ sublabel }}</div>{% endif %}
 </div>
 {% endmacro %}
+
+{#
+  La lettura di una pagina: verdetto, evidenza, cosa fare.
+  È il blocco che trasforma i grafici in qualcosa di leggibile.
+#}
+{% macro page_reading(r) %}
+{% if r and r.has_content %}
+<section class="reading reading-{{ r.tone }}">
+  <p class="reading-eyebrow">Lettura</p>
+  <p class="reading-verdict">{{ r.verdict }}</p>
+  {% if r.evidence %}<p class="reading-evidence">{{ r.evidence }}</p>{% endif %}
+  {% if r.action %}<p class="reading-action">{{ r.action }}</p>{% endif %}
+</section>
+{% endif %}
+{% endmacro %}
+
+{# Le note che si attaccano sotto un grafico specifico. #}
+{% macro notes_for(r, metric) %}
+{% if r %}
+  {% set matching = r.notes | selectattr('metric', 'equalto', metric) | list %}
+  {% if matching %}
+  <ul class="metric-notes">
+    {% for n in matching %}
+      <li class="metric-note {{ n.tone }}">{{ n.text }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+{% endif %}
+{% endmacro %}

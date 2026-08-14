@@ -1,10 +1,14 @@
 {% extends "base.html" %}
+{% from "_components.html" import page_reading, notes_for %}
 {% block title %}Corpo · Garmin Connector{% endblock %}
 {% block heading %}Composizione corporea{% endblock %}
 
 {% block content %}
+{{ page_reading(reading) }}
+
 <section class="grid-2">
-  <div class="card span-2"><h2>Peso · ultimi 90 giorni (kg)</h2><div class="chart-box"><canvas id="weightChart"></canvas></div></div>
+  <div class="card span-2"><h2>Peso · ultimi 90 giorni (kg)</h2><div class="chart-box"><canvas id="weightChart"></canvas></div>
+    {{ notes_for(reading, "weight") }}</div>
   <div class="card"><h2>Massa grassa (%)</h2><div class="chart-box"><canvas id="fatChart"></canvas></div></div>
   <div class="card"><h2>Massa muscolare (kg)</h2><div class="chart-box"><canvas id="muscleChart"></canvas></div></div>
 </section>

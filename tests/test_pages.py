@@ -36,3 +36,46 @@ def test_activity_detail_of_unknown_activity_does_not_crash(logged_client, monke
 
     monkeypatch.setattr(service, "get_activity_full", lambda user, aid: {})
     assert logged_client.get("/activities/999").status_code == 200
+
+
+# --------------------------- cache degli asset ---------------------------
+
+def test_static_version_follows_file_changes(tmp_path, monkeypatch):
+    """La versione va ricalcolata, non congelata all'import.
+
+    Se resta ferma, dopo una modifica al CSS o al JS i browser continuano a
+    servire il file vecchio dalla cache.
+    """
+    import time
+
+    from app import templating
+
+    monkeypatch.setattr(templating, "STATIC_DIR", tmp_path)
+    asset = tmp_path / "style.css"
+    asset.write_text("a{}")
+    first = templating.static_version()
+
+    time.sleep(1.1)  # la versione ha risoluzione al secondo
+    asset.write_text("a{color:red}")
+    assert templating.static_version() != first
+
+
+def test_static_version_is_a_callable_in_templates():
+    """I template chiamano static_v(): se fosse un valore, non si aggiornerebbe."""
+    from app.templating import templates
+
+    assert callable(templates.env.globals["static_v"])
+
+
+def test_pages_carry_a_cache_busted_asset_url(logged_client):
+    page = logged_client.get("/coach").text
+    assert "/static/style.css?v=" in page
+    assert "/static/app.js?v=" in page
+    assert "{{" not in page.split("</head>")[0]  # nessuna espressione non renderizzata
+
+
+def test_static_version_survives_a_missing_directory(tmp_path, monkeypatch):
+    from app import templating
+
+    monkeypatch.setattr(templating, "STATIC_DIR", tmp_path / "inesistente")
+    assert templating.static_version() == "0"

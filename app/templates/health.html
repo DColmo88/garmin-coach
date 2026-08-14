@@ -1,13 +1,20 @@
 {% extends "base.html" %}
+{% from "_components.html" import page_reading, notes_for %}
 {% block title %}Salute · Garmin Connector{% endblock %}
 {% block heading %}Salute & Wellness{% endblock %}
 
 {% block content %}
+{{ page_reading(reading) }}
+
 <section class="grid-2">
-  <div class="card"><h2>Frequenza cardiaca (riposo / min / max)</h2><div class="chart-box"><canvas id="hrChart"></canvas></div></div>
-  <div class="card"><h2>Stress medio</h2><div class="chart-box"><canvas id="stressChart"></canvas></div></div>
-  <div class="card"><h2>Body Battery (max / min)</h2><div class="chart-box"><canvas id="bbChart"></canvas></div></div>
-  <div class="card"><h2>Passi e piani</h2><div class="chart-box"><canvas id="stepsChart"></canvas></div></div>
+  <div class="card"><h2>Frequenza cardiaca (riposo / min / max)</h2><div class="chart-box"><canvas id="hrChart"></canvas></div>
+    {{ notes_for(reading, "hr") }}</div>
+  <div class="card"><h2>Stress medio</h2><div class="chart-box"><canvas id="stressChart"></canvas></div>
+    {{ notes_for(reading, "stress") }}</div>
+  <div class="card"><h2>Body Battery (max / min)</h2><div class="chart-box"><canvas id="bbChart"></canvas></div>
+    {{ notes_for(reading, "battery") }}</div>
+  <div class="card"><h2>Passi e piani</h2><div class="chart-box"><canvas id="stepsChart"></canvas></div>
+    {{ notes_for(reading, "steps") }}</div>
   <div class="card"><h2>SpO₂ e respirazione</h2><div class="chart-box"><canvas id="spo2Chart"></canvas></div></div>
   <div class="card"><h2>Minuti di intensità</h2><div class="chart-box"><canvas id="intensityChart"></canvas></div></div>
 </section>

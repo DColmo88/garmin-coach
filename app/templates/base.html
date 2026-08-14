@@ -2,9 +2,9 @@
 <html lang="it">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{% block title %}Garmin Connector{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>{% block title %}Garmin Coach{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v() }}" />
   <link rel="manifest" href="/static/manifest.json" />
   <meta name="theme-color" content="#0d1117" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
@@ -14,25 +14,33 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
+  {#
+    Una sola lista di voci per due navigazioni: barra laterale su desktop,
+    barra in basso su telefono. `primary` marca le cinque voci che entrano
+    nella barra mobile; le altre stanno nel pannello "Altro".
+  #}
+  {% set items = [
+    ('coach',       '/coach',       '🎯', 'Coach',      true),
+    ('chat',        '/chat',        '💬', 'Coach AI',   true),
+    ('overview',    '/',            '◎',  'Panoramica', true),
+    ('activities',  '/activities',  '🏃', 'Attività',   true),
+    ('goals',       '/goals',       '🏁', 'Obiettivo',  false),
+    ('sleep',       '/sleep',       '🌙', 'Sonno',      false),
+    ('health',      '/health',      '❤️', 'Salute',     false),
+    ('body',        '/body',        '⚖️', 'Corpo',      false),
+    ('performance', '/performance', '📈', 'Performance', false),
+    ('devices',     '/devices',     '⌚', 'Dispositivi', false),
+    ('ai',          '/ai',          '🤖', 'AI Insights', false),
+    ('settings',    '/settings',    '⚙️', 'Impostazioni', false),
+  ] %}
+
   <aside class="sidebar">
-    <div class="logo"><span class="dot"></span> Garmin<b>Connector</b></div>
+    <div class="logo"><span class="dot"></span> Garmin<b>Coach</b></div>
     <nav>
-      {% set items = [
-        ('coach', '/coach', '🎯 Coach'),
-        ('chat', '/chat', '💬 Parla col coach'),
-        ('goals', '/goals', '🏁 Obiettivo'),
-        ('overview', '/', '◎ Panoramica'),
-        ('activities', '/activities', '🏃 Attività'),
-        ('sleep', '/sleep', '🌙 Sonno'),
-        ('health', '/health', '❤️ Salute'),
-        ('body', '/body', '⚖️ Corpo'),
-        ('performance', '/performance', '📈 Performance'),
-        ('devices', '/devices', '⌚ Dispositivi'),
-        ('ai', '/ai', '🤖 AI Insights'),
-        ('settings', '/settings', '⚙️ Impostazioni'),
-      ] %}
-      {% for key, url, label in items %}
-        <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">{{ label }}</a>
+      {% for key, url, icon, label, primary in items %}
+        <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">
+          <span class="nav-icon">{{ icon }}</span><span class="nav-label">{{ label }}</span>
+        </a>
       {% endfor %}
     </nav>
     <div class="sidebar-foot">
@@ -57,8 +65,39 @@
     </main>
   </div>
 
+  {# Navigazione mobile: sempre nel DOM, visibile solo sotto la soglia. #}
+  <nav class="bottom-nav">
+    {% for key, url, icon, label, primary in items if primary %}
+      <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">
+        <span class="nav-icon">{{ icon }}</span><span class="nav-label">{{ label }}</span>
+      </a>
+    {% endfor %}
+    <button type="button" class="bottom-more" id="moreBtn" aria-expanded="false"
+            aria-controls="morePanel">
+      <span class="nav-icon">⋯</span><span class="nav-label">Altro</span>
+    </button>
+  </nav>
+
+  <div class="more-panel" id="morePanel" hidden>
+    <div class="more-sheet">
+      <p class="more-title">Tutte le sezioni</p>
+      <div class="more-grid">
+        {% for key, url, icon, label, primary in items if not primary %}
+          <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">
+            <span class="nav-icon">{{ icon }}</span><span class="nav-label">{{ label }}</span>
+          </a>
+        {% endfor %}
+      </div>
+      {% if user %}
+      <form method="post" action="/logout" class="more-logout">
+        <button type="submit" class="btn">Esci da {{ user.display_name or 'questo account' }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
   <div id="syncToast" class="toast"></div>
-  <script src="/static/app.js?v={{ static_v }}"></script>
+  <script src="/static/app.js?v={{ static_v() }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

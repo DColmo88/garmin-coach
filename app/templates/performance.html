@@ -1,12 +1,18 @@
 {% extends "base.html" %}
+{% from "_components.html" import page_reading, notes_for %}
 {% block title %}Performance · Garmin Connector{% endblock %}
 {% block heading %}Performance & Training{% endblock %}
 
 {% block content %}
+{{ page_reading(reading) }}
+
 <section class="grid-2">
-  <div class="card"><h2>VO₂max (corsa / bici)</h2><div class="chart-box"><canvas id="vo2Chart"></canvas></div></div>
-  <div class="card"><h2>Training load</h2><div class="chart-box"><canvas id="loadChart"></canvas></div></div>
-  <div class="card"><h2>HRV (media settimanale)</h2><div class="chart-box"><canvas id="hrvChart"></canvas></div></div>
+  <div class="card"><h2>VO₂max (corsa / bici)</h2><div class="chart-box"><canvas id="vo2Chart"></canvas></div>
+    {{ notes_for(reading, "vo2max") }}</div>
+  <div class="card"><h2>Training load</h2><div class="chart-box"><canvas id="loadChart"></canvas></div>
+    {{ notes_for(reading, "load") }}</div>
+  <div class="card"><h2>HRV (media settimanale)</h2><div class="chart-box"><canvas id="hrvChart"></canvas></div>
+    {{ notes_for(reading, "hrv") }}</div>
   <div class="card"><h2>Training readiness</h2><div class="chart-box"><canvas id="readyChart"></canvas></div></div>
 </section>
 

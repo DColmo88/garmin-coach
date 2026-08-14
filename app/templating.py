@@ -10,11 +10,16 @@ STATIC_DIR = BASE_DIR / "static"
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
-def _static_version() -> str:
+def static_version() -> str:
     """Impronta degli asset statici, per invalidare la cache dei browser.
 
     Senza questo, dopo un deploy i browser continuano a servire il CSS e il JS
     vecchi finché non si fa un hard refresh.
+
+    Va ricalcolata a ogni render, non una volta all'import: in sviluppo
+    `uvicorn --reload` riavvia solo quando cambia un file Python, quindi una
+    modifica al solo CSS o JS lascerebbe la versione ferma e il browser
+    continuerebbe a servire dalla cache. Costa una manciata di `stat()`.
     """
     try:
         newest = max(f.stat().st_mtime for f in STATIC_DIR.glob("*") if f.is_file())
@@ -23,7 +28,7 @@ def _static_version() -> str:
         return "0"
 
 
-templates.env.globals["static_v"] = _static_version()
+templates.env.globals["static_v"] = static_version
 
 
 def _num(value) -> float | None:

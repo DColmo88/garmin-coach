@@ -11,6 +11,13 @@ from sqlalchemy.orm import Session
 from app import goals
 from app import queries as q
 from app.ai.insights import Insight
+from app.insights import (
+    read_activities,
+    read_body,
+    read_health,
+    read_performance,
+    read_sleep,
+)
 from app.ai.provider import get_provider
 from app.ai.readiness import compute_readiness
 from app.auth.session import require_user
@@ -133,7 +140,8 @@ def activities(request: Request, db: Session = Depends(get_session),
     chart = {"type_labels": list(by_type.keys()), "type_counts": list(by_type.values())}
     return templates.TemplateResponse(
         "activities.html",
-        _ctx(request, "activities", user, activities=rows, chart=chart),
+        _ctx(request, "activities", user, activities=rows, chart=chart,
+             reading=read_activities(rows)),
     )
 
 
@@ -173,7 +181,8 @@ def sleep(request: Request, db: Session = Depends(get_session),
     }
     return templates.TemplateResponse(
         "sleep.html",
-        _ctx(request, "sleep", user, rows=list(reversed(rows)), chart=chart),
+        _ctx(request, "sleep", user, rows=list(reversed(rows)), chart=chart,
+             reading=read_sleep(rows)),
     )
 
 
@@ -200,7 +209,8 @@ def health(request: Request, db: Session = Depends(get_session),
     }
     return templates.TemplateResponse(
         "health.html",
-        _ctx(request, "health", user, rows=list(reversed(rows)), chart=chart),
+        _ctx(request, "health", user, rows=list(reversed(rows)), chart=chart,
+             reading=read_health(rows)),
     )
 
 
@@ -219,7 +229,8 @@ def body(request: Request, db: Session = Depends(get_session),
     }
     return templates.TemplateResponse(
         "body.html",
-        _ctx(request, "body", user, rows=list(reversed(rows)), chart=chart),
+        _ctx(request, "body", user, rows=list(reversed(rows)), chart=chart,
+             reading=read_body(rows)),
     )
 
 
@@ -248,7 +259,7 @@ def performance(request: Request, db: Session = Depends(get_session),
     return templates.TemplateResponse(
         "performance.html",
         _ctx(request, "performance", user, rows=list(reversed(rows)), chart=chart,
-             snapshot=snapshot, error=error),
+             snapshot=snapshot, error=error, reading=read_performance(rows)),
     )
 
 

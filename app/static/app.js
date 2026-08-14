@@ -143,3 +143,20 @@ function doughnutChart(id, labels, data, colors) {
 }
 
 window.GC = { lineChart, barChart, doughnutChart, PALETTE };
+
+// ---------------- Pannello "Altro" (navigazione mobile) ----------------
+(() => {
+  const moreBtn = document.getElementById("moreBtn");
+  const panel = document.getElementById("morePanel");
+  if (!moreBtn || !panel) return;
+
+  function setOpen(open) {
+    panel.hidden = !open;
+    moreBtn.setAttribute("aria-expanded", String(open));
+  }
+
+  moreBtn.addEventListener("click", () => setOpen(panel.hidden));
+  // Toccare fuori dal foglio chiude.
+  panel.addEventListener("click", (e) => { if (e.target === panel) setOpen(false); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+})();
