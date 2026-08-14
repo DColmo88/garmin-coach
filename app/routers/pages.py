@@ -9,8 +9,9 @@ from app import queries as q
 from app.ai.insights import top_insights
 from app.ai.provider import get_provider
 from app.ai.readiness import compute_readiness
-from app.config import settings
+from app.auth.session import require_user
 from app.db.database import get_session
+from app.db.models import User
 from app.garmin import service
 from app.garmin.client import GarminClientError
 from app.templating import templates
@@ -18,11 +19,14 @@ from app.templating import templates
 router = APIRouter()
 
 
-def _ctx(request: Request, active: str, **extra) -> dict:
+def _ctx(request: Request, active: str, user: User, **extra) -> dict:
+    """Contesto comune a tutti i template: richiesta, voce di menu attiva, utente."""
     base = {
         "request": request,
         "active": active,
-        "garmin_configured": settings.garmin_configured,
+        "user": user,
+        # Dalla v2 le credenziali sono per-utente: chi è loggato è per definizione collegato.
+        "garmin_configured": True,
     }
     base.update(extra)
     return base
@@ -31,8 +35,9 @@ def _ctx(request: Request, active: str, **extra) -> dict:
 # --------------------------- Coach ---------------------------
 
 @router.get("/coach", response_class=HTMLResponse)
-def coach(request: Request, db: Session = Depends(get_session)):
-    snap = q.coach_snapshot(db)
+def coach(request: Request, db: Session = Depends(get_session),
+          user: User = Depends(require_user)):
+    snap = q.coach_snapshot(db, user.id)
     readiness = compute_readiness(snap)
     insights = top_insights(snap, 3)
     coaching = get_provider().coach(snap, readiness)
@@ -47,7 +52,7 @@ def coach(request: Request, db: Session = Depends(get_session)):
     in_range = sum(1 for f in readiness.breakdown if f.color == "green")
     return templates.TemplateResponse(
         "coach.html",
-        _ctx(request, "coach", snap=snap, readiness=readiness, insights=insights,
+        _ctx(request, "coach", user, snap=snap, readiness=readiness, insights=insights,
              coaching=coaching, mini=mini, in_range=in_range,
              total_metrics=len(readiness.breakdown)),
     )
@@ -56,11 +61,12 @@ def coach(request: Request, db: Session = Depends(get_session)):
 # --------------------------- Panoramica ---------------------------
 
 @router.get("/", response_class=HTMLResponse)
-def overview(request: Request, db: Session = Depends(get_session)):
-    wellness = q.wellness_series(db, 28)
-    sleep = q.sleep_series(db, 28)
-    training = q.training_series(db, 28)
-    activities = q.recent_activities(db, 5)
+def overview(request: Request, db: Session = Depends(get_session),
+             user: User = Depends(require_user)):
+    wellness = q.wellness_series(db, user.id, 28)
+    sleep = q.sleep_series(db, user.id, 28)
+    training = q.training_series(db, user.id, 28)
+    activities = q.recent_activities(db, user.id, 5)
 
     chart = {
         "labels": q.labels(wellness),
@@ -85,7 +91,7 @@ def overview(request: Request, db: Session = Depends(get_session)):
     }
     return templates.TemplateResponse(
         "overview.html",
-        _ctx(request, "overview", chart=chart, kpis=kpis, activities=activities,
+        _ctx(request, "overview", user, chart=chart, kpis=kpis, activities=activities,
              has_data=bool(wellness or training)),
     )
 
@@ -93,32 +99,35 @@ def overview(request: Request, db: Session = Depends(get_session)):
 # --------------------------- Attività ---------------------------
 
 @router.get("/activities", response_class=HTMLResponse)
-def activities(request: Request, db: Session = Depends(get_session)):
-    rows = q.recent_activities(db, 50)
+def activities(request: Request, db: Session = Depends(get_session),
+               user: User = Depends(require_user)):
+    rows = q.recent_activities(db, user.id, 50)
     by_type: dict[str, int] = {}
     for a in rows:
         by_type[a.activity_type or "altro"] = by_type.get(a.activity_type or "altro", 0) + 1
     chart = {"type_labels": list(by_type.keys()), "type_counts": list(by_type.values())}
     return templates.TemplateResponse(
         "activities.html",
-        _ctx(request, "activities", activities=rows, chart=chart),
+        _ctx(request, "activities", user, activities=rows, chart=chart),
     )
 
 
 @router.get("/activities/{activity_id}", response_class=HTMLResponse)
-def activity_detail(activity_id: int, request: Request, db: Session = Depends(get_session)):
-    activity = q.get_activity(db, activity_id)
+def activity_detail(activity_id: int, request: Request,
+                    db: Session = Depends(get_session),
+                    user: User = Depends(require_user)):
+    activity = q.get_activity(db, user.id, activity_id)
     detail = None
     error = None
     try:
-        detail = service.get_activity_full(activity_id)
+        detail = service.get_activity_full(user, activity_id)
     except GarminClientError as exc:
         error = str(exc)
     except Exception as exc:  # noqa: BLE001
         error = f"Impossibile caricare i dettagli live: {exc}"
     return templates.TemplateResponse(
         "activity_detail.html",
-        _ctx(request, "activities", activity=activity, detail=detail, error=error,
+        _ctx(request, "activities", user, activity=activity, detail=detail, error=error,
              activity_id=activity_id),
     )
 
@@ -126,8 +135,9 @@ def activity_detail(activity_id: int, request: Request, db: Session = Depends(ge
 # --------------------------- Sonno ---------------------------
 
 @router.get("/sleep", response_class=HTMLResponse)
-def sleep(request: Request, db: Session = Depends(get_session)):
-    rows = q.sleep_series(db, 28)
+def sleep(request: Request, db: Session = Depends(get_session),
+          user: User = Depends(require_user)):
+    rows = q.sleep_series(db, user.id, 28)
     chart = {
         "labels": q.labels(rows),
         "deep": [(v or 0) / 3600 for v in q.values(rows, "deep_sleep_sec")],
@@ -138,15 +148,16 @@ def sleep(request: Request, db: Session = Depends(get_session)):
     }
     return templates.TemplateResponse(
         "sleep.html",
-        _ctx(request, "sleep", rows=list(reversed(rows)), chart=chart),
+        _ctx(request, "sleep", user, rows=list(reversed(rows)), chart=chart),
     )
 
 
 # --------------------------- Salute ---------------------------
 
 @router.get("/health", response_class=HTMLResponse)
-def health(request: Request, db: Session = Depends(get_session)):
-    rows = q.wellness_series(db, 28)
+def health(request: Request, db: Session = Depends(get_session),
+           user: User = Depends(require_user)):
+    rows = q.wellness_series(db, user.id, 28)
     chart = {
         "labels": q.labels(rows),
         "resting_hr": q.values(rows, "resting_hr"),
@@ -164,15 +175,16 @@ def health(request: Request, db: Session = Depends(get_session)):
     }
     return templates.TemplateResponse(
         "health.html",
-        _ctx(request, "health", rows=list(reversed(rows)), chart=chart),
+        _ctx(request, "health", user, rows=list(reversed(rows)), chart=chart),
     )
 
 
 # --------------------------- Corpo ---------------------------
 
 @router.get("/body", response_class=HTMLResponse)
-def body(request: Request, db: Session = Depends(get_session)):
-    rows = q.body_series(db, 90)
+def body(request: Request, db: Session = Depends(get_session),
+         user: User = Depends(require_user)):
+    rows = q.body_series(db, user.id, 90)
     chart = {
         "labels": q.labels(rows),
         "weight": [(v or 0) / 1000 if v else None for v in q.values(rows, "weight_g")],
@@ -182,15 +194,16 @@ def body(request: Request, db: Session = Depends(get_session)):
     }
     return templates.TemplateResponse(
         "body.html",
-        _ctx(request, "body", rows=list(reversed(rows)), chart=chart),
+        _ctx(request, "body", user, rows=list(reversed(rows)), chart=chart),
     )
 
 
 # --------------------------- Performance ---------------------------
 
 @router.get("/performance", response_class=HTMLResponse)
-def performance(request: Request, db: Session = Depends(get_session)):
-    rows = q.training_series(db, 28)
+def performance(request: Request, db: Session = Depends(get_session),
+                user: User = Depends(require_user)):
+    rows = q.training_series(db, user.id, 28)
     chart = {
         "labels": q.labels(rows),
         "vo2max": q.values(rows, "vo2max"),
@@ -201,16 +214,15 @@ def performance(request: Request, db: Session = Depends(get_session)):
     }
     snapshot = None
     error = None
-    if settings.garmin_configured:
-        try:
-            snapshot = service.get_performance_snapshot()
-        except GarminClientError as exc:
-            error = str(exc)
-        except Exception as exc:  # noqa: BLE001
-            error = f"Dati live non disponibili: {exc}"
+    try:
+        snapshot = service.get_performance_snapshot(user)
+    except GarminClientError as exc:
+        error = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Dati live non disponibili: {exc}"
     return templates.TemplateResponse(
         "performance.html",
-        _ctx(request, "performance", rows=list(reversed(rows)), chart=chart,
+        _ctx(request, "performance", user, rows=list(reversed(rows)), chart=chart,
              snapshot=snapshot, error=error),
     )
 
@@ -218,31 +230,30 @@ def performance(request: Request, db: Session = Depends(get_session)):
 # --------------------------- Dispositivi & Gear ---------------------------
 
 @router.get("/devices", response_class=HTMLResponse)
-def devices(request: Request):
+def devices(request: Request, user: User = Depends(require_user)):
     data = {"devices": [], "gear": [], "badges": {}}
     error = None
-    if settings.garmin_configured:
-        try:
-            data["devices"] = service.get_devices()
-            data["gear"] = service.get_gear_overview()
-            data["badges"] = service.get_badges()
-        except GarminClientError as exc:
-            error = str(exc)
-        except Exception as exc:  # noqa: BLE001
-            error = f"Dati live non disponibili: {exc}"
+    try:
+        data["devices"] = service.get_devices(user)
+        data["gear"] = service.get_gear_overview(user)
+        data["badges"] = service.get_badges(user)
+    except GarminClientError as exc:
+        error = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        error = f"Dati live non disponibili: {exc}"
     return templates.TemplateResponse(
         "devices.html",
-        _ctx(request, "devices", data=data, error=error),
+        _ctx(request, "devices", user, data=data, error=error),
     )
 
 
 # --------------------------- AI ---------------------------
 
 @router.get("/ai", response_class=HTMLResponse)
-def ai_page(request: Request):
+def ai_page(request: Request, user: User = Depends(require_user)):
     from app.ai.provider import get_provider
 
     return templates.TemplateResponse(
         "ai.html",
-        _ctx(request, "ai", provider_name=get_provider().name),
+        _ctx(request, "ai", user, provider_name=get_provider().name),
     )

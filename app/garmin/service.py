@@ -2,7 +2,8 @@
 
 Esempi: dispositivi, gear, record personali, profilo, dettaglio di una
 singola attività. Una cache in memoria con TTL evita di martellare l'API
-a ogni refresh di pagina.
+a ogni refresh di pagina. Le chiavi di cache includono l'id utente, così i
+dati di un utente non possono mai finire nella pagina di un altro.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import time
 from datetime import date
 from typing import Any, Callable
 
+from app.db.models import User
 from app.garmin.client import get_client
 
 logger = logging.getLogger(__name__)
@@ -19,18 +21,25 @@ _CACHE: dict[str, tuple[float, Any]] = {}
 _TTL_SECONDS = 300  # 5 minuti
 
 
-def _cached(key: str, producer: Callable[[], Any], ttl: int = _TTL_SECONDS) -> Any:
+def _cached(user_id: int, key: str, producer: Callable[[], Any], ttl: int = _TTL_SECONDS) -> Any:
+    full_key = f"{user_id}:{key}"
     now = time.time()
-    hit = _CACHE.get(key)
+    hit = _CACHE.get(full_key)
     if hit and now - hit[0] < ttl:
         return hit[1]
     value = producer()
-    _CACHE[key] = (now, value)
+    _CACHE[full_key] = (now, value)
     return value
 
 
-def clear_cache() -> None:
-    _CACHE.clear()
+def clear_cache(user_id: int | None = None) -> None:
+    """Svuota la cache di un utente, o di tutti se `user_id` è None."""
+    if user_id is None:
+        _CACHE.clear()
+        return
+    prefix = f"{user_id}:"
+    for key in [k for k in _CACHE if k.startswith(prefix)]:
+        del _CACHE[key]
 
 
 def _safe(producer: Callable[[], Any], default: Any) -> Any:
@@ -44,32 +53,32 @@ def _safe(producer: Callable[[], Any], default: Any) -> Any:
 
 # --------------------------- profilo / dispositivi ---------------------------
 
-def get_overview_snapshot() -> dict[str, Any]:
+def get_overview_snapshot(user: User) -> dict[str, Any]:
     """Nome utente + dispositivo usato più di recente (per l'header)."""
     def producer():
-        c = get_client()
+        c = get_client(user)
         return {
             "full_name": _safe(c.get_full_name, None),
             "last_device": _safe(c.get_device_last_used, {}),
         }
 
-    return _cached("overview_snapshot", producer)
+    return _cached(user.id, "overview_snapshot", producer)
 
 
-def get_devices() -> list[dict]:
-    return _cached("devices", lambda: _safe(get_client().get_devices, []))
+def get_devices(user: User) -> list[dict]:
+    return _cached(user.id, "devices", lambda: _safe(get_client(user).get_devices, []))
 
 
-def get_profile() -> dict:
-    return _cached("profile", lambda: _safe(get_client().get_user_profile, {}))
+def get_profile(user: User) -> dict:
+    return _cached(user.id, "profile", lambda: _safe(get_client(user).get_user_profile, {}))
 
 
 # --------------------------- gear ---------------------------
 
-def get_gear_overview() -> list[dict]:
+def get_gear_overview(user: User) -> list[dict]:
     """Lista gear con statistiche aggregate."""
     def producer():
-        c = get_client()
+        c = get_client(user)
         profile = _safe(c.get_user_profile, {}) or {}
         user_number = profile.get("userProfileNumber") or profile.get("id")
         if not user_number:
@@ -82,15 +91,15 @@ def get_gear_overview() -> list[dict]:
             out.append({"gear": g, "stats": stats})
         return out
 
-    return _cached("gear_overview", producer)
+    return _cached(user.id, "gear_overview", producer)
 
 
 # --------------------------- performance snapshot ---------------------------
 
-def get_performance_snapshot() -> dict[str, Any]:
+def get_performance_snapshot(user: User) -> dict[str, Any]:
     """Record personali + previsioni di gara + endurance/hill score."""
     def producer():
-        c = get_client()
+        c = get_client(user)
         today = date.today().isoformat()
         return {
             "personal_records": _safe(c.get_personal_record, []),
@@ -100,27 +109,27 @@ def get_performance_snapshot() -> dict[str, Any]:
             "primary_device": _safe(c.get_primary_training_device, {}),
         }
 
-    return _cached("performance_snapshot", producer)
+    return _cached(user.id, "performance_snapshot", producer)
 
 
 # --------------------------- badge / sfide ---------------------------
 
-def get_badges() -> dict[str, Any]:
+def get_badges(user: User) -> dict[str, Any]:
     def producer():
-        c = get_client()
+        c = get_client(user)
         return {
             "earned": _safe(c.get_earned_badges, []),
             "adhoc": _safe(lambda: c.get_adhoc_challenges(0, 10), []),
         }
 
-    return _cached("badges", producer)
+    return _cached(user.id, "badges", producer)
 
 
 # --------------------------- dettaglio attività ---------------------------
 
-def get_activity_full(activity_id: int) -> dict[str, Any]:
+def get_activity_full(user: User, activity_id: int) -> dict[str, Any]:
     """Tutti i dettagli di una singola attività (no cache: on-demand)."""
-    c = get_client()
+    c = get_client(user)
     return {
         "summary": _safe(lambda: c.get_activity(activity_id), {}),
         "splits": _safe(lambda: c.get_activity_splits(activity_id), {}),

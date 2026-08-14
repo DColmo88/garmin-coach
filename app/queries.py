@@ -21,40 +21,61 @@ def _asc(rows: list) -> list:
     return list(reversed(rows))
 
 
-def recent_activities(db: Session, limit: int = 50) -> list[Activity]:
+def recent_activities(db: Session, user_id: int, limit: int = 50) -> list[Activity]:
     return list(
-        db.scalars(select(Activity).order_by(Activity.start_time.desc()).limit(limit)).all()
+        db.scalars(
+            select(Activity)
+            .where(Activity.user_id == user_id)
+            .order_by(Activity.start_time.desc())
+            .limit(limit)
+        ).all()
     )
 
 
-def get_activity(db: Session, activity_id: int) -> Activity | None:
-    return db.scalar(select(Activity).where(Activity.garmin_activity_id == activity_id))
+def get_activity(db: Session, user_id: int, activity_id: int) -> Activity | None:
+    return db.scalar(
+        select(Activity).where(
+            Activity.user_id == user_id, Activity.garmin_activity_id == activity_id
+        )
+    )
 
 
-def wellness_series(db: Session, days: int = 28) -> list[DailyWellness]:
+def wellness_series(db: Session, user_id: int, days: int = 28) -> list[DailyWellness]:
     rows = db.scalars(
-        select(DailyWellness).order_by(DailyWellness.day.desc()).limit(days)
+        select(DailyWellness)
+        .where(DailyWellness.user_id == user_id)
+        .order_by(DailyWellness.day.desc())
+        .limit(days)
     ).all()
     return _asc(list(rows))
 
 
-def sleep_series(db: Session, days: int = 28) -> list[SleepRecord]:
+def sleep_series(db: Session, user_id: int, days: int = 28) -> list[SleepRecord]:
     rows = db.scalars(
-        select(SleepRecord).order_by(SleepRecord.day.desc()).limit(days)
+        select(SleepRecord)
+        .where(SleepRecord.user_id == user_id)
+        .order_by(SleepRecord.day.desc())
+        .limit(days)
     ).all()
     return _asc(list(rows))
 
 
-def training_series(db: Session, days: int = 28) -> list[TrainingMetric]:
+def training_series(db: Session, user_id: int, days: int = 28) -> list[TrainingMetric]:
     rows = db.scalars(
-        select(TrainingMetric).order_by(TrainingMetric.day.desc()).limit(days)
+        select(TrainingMetric)
+        .where(TrainingMetric.user_id == user_id)
+        .order_by(TrainingMetric.day.desc())
+        .limit(days)
     ).all()
     return _asc(list(rows))
 
 
-def body_series(db: Session, days: int = 90) -> list[BodyComposition]:
+def body_series(db: Session, user_id: int, days: int = 90) -> list[BodyComposition]:
     rows = db.scalars(
-        select(BodyComposition).order_by(BodyComposition.day.desc()).limit(days)
+        select(BodyComposition)
+        .where(BodyComposition.user_id == user_id)
+        .order_by(BodyComposition.day.desc())
+        .limit(days)
     ).all()
     return _asc(list(rows))
 
@@ -85,15 +106,15 @@ def _is_run(activity_type: str | None) -> bool:
     return bool(activity_type) and "run" in activity_type.lower()
 
 
-def coach_snapshot(db: Session) -> dict:
+def coach_snapshot(db: Session, user_id: int) -> dict:
     """Costruisce lo snapshot deterministico per readiness/insights/coaching.
 
     Tutto None-safe: campi mancanti -> None, mai eccezioni.
     """
-    wellness = wellness_series(db, 30)          # crescente
-    sleep = sleep_series(db, 30)
-    training = training_series(db, 30)
-    acts = recent_activities(db, 50)            # desc per start_time
+    wellness = wellness_series(db, user_id, 30)   # crescente
+    sleep = sleep_series(db, user_id, 30)
+    training = training_series(db, user_id, 30)
+    acts = recent_activities(db, user_id, 50)     # desc per start_time
 
     rhr_all = [w.resting_hr for w in wellness]
     rhr_7 = [w.resting_hr for w in wellness[-7:]]

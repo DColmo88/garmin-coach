@@ -1,7 +1,10 @@
 # Segreti e dati locali
 .env
+.env.*
+!.env.example
 data/
 *.db
+*.db.*bak
 
 # Python
 venv/

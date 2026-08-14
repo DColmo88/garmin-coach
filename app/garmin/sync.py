@@ -19,6 +19,7 @@ from app.db.models import (
     DailyWellness,
     SleepRecord,
     TrainingMetric,
+    User,
 )
 from app.garmin.client import get_client
 
@@ -63,18 +64,20 @@ def _last_days(days: int) -> list[date]:
     return [today - timedelta(days=i) for i in range(days)]
 
 
-def _upsert(db: Session, model, day: date):
-    """Restituisce (riga, is_new) facendo lookup per giorno."""
-    existing = db.scalar(select(model).where(model.day == day))
+def _upsert(db: Session, model, user_id: int, day: date):
+    """Restituisce (riga, is_new) cercando la riga di QUEL utente in QUEL giorno."""
+    existing = db.scalar(
+        select(model).where(model.user_id == user_id, model.day == day)
+    )
     if existing:
         return existing, False
-    return model(day=day), True
+    return model(user_id=user_id, day=day), True
 
 
 # --------------------------- attività ---------------------------
 
-def sync_activities(db: Session, limit: int = 50) -> int:
-    client = get_client()
+def sync_activities(db: Session, user: User, limit: int = 50) -> int:
+    client = get_client(user)
     activities = client.get_activities(0, limit) or []
     count = 0
 
@@ -83,8 +86,12 @@ def sync_activities(db: Session, limit: int = 50) -> int:
         if gid is None:
             continue
 
-        existing = db.scalar(select(Activity).where(Activity.garmin_activity_id == gid))
-        row = existing or Activity(garmin_activity_id=gid)
+        existing = db.scalar(
+            select(Activity).where(
+                Activity.user_id == user.id, Activity.garmin_activity_id == gid
+            )
+        )
+        row = existing or Activity(user_id=user.id, garmin_activity_id=gid)
 
         row.name = act.get("activityName")
         row.activity_type = _dig(act, "activityType", "typeKey")
@@ -112,8 +119,8 @@ def sync_activities(db: Session, limit: int = 50) -> int:
 
 # --------------------------- sonno ---------------------------
 
-def sync_sleep(db: Session, days: int = 28) -> int:
-    client = get_client()
+def sync_sleep(db: Session, user: User, days: int = 28) -> int:
+    client = get_client(user)
     count = 0
 
     for day in _last_days(days):
@@ -128,7 +135,7 @@ def sync_sleep(db: Session, days: int = 28) -> int:
         if not dto:
             continue
 
-        row, is_new = _upsert(db, SleepRecord, day)
+        row, is_new = _upsert(db, SleepRecord, user.id, day)
         row.total_sleep_sec = dto.get("sleepTimeSeconds")
         row.deep_sleep_sec = dto.get("deepSleepSeconds")
         row.light_sleep_sec = dto.get("lightSleepSeconds")
@@ -150,8 +157,8 @@ def sync_sleep(db: Session, days: int = 28) -> int:
 
 # --------------------------- training / performance ---------------------------
 
-def sync_training(db: Session, days: int = 28) -> int:
-    client = get_client()
+def sync_training(db: Session, user: User, days: int = 28) -> int:
+    client = get_client(user)
     count = 0
 
     for day in _last_days(days):
@@ -165,7 +172,7 @@ def sync_training(db: Session, days: int = 28) -> int:
         if all(v is None for v in (vo2_run, vo2_bike, status, load, hrv_avg, hrv_status, readiness)):
             continue
 
-        row, is_new = _upsert(db, TrainingMetric, day)
+        row, is_new = _upsert(db, TrainingMetric, user.id, day)
         row.vo2max = vo2_run
         row.vo2max_cycling = vo2_bike
         row.training_status = status
@@ -232,8 +239,8 @@ def _fetch_readiness(client, cdate: str) -> tuple[float | None, str | None]:
 
 # --------------------------- wellness quotidiano ---------------------------
 
-def sync_wellness(db: Session, days: int = 28) -> int:
-    client = get_client()
+def sync_wellness(db: Session, user: User, days: int = 28) -> int:
+    client = get_client(user)
     count = 0
 
     for day in _last_days(days):
@@ -246,7 +253,7 @@ def sync_wellness(db: Session, days: int = 28) -> int:
         if not isinstance(s, dict) or not s:
             continue
 
-        row, is_new = _upsert(db, DailyWellness, day)
+        row, is_new = _upsert(db, DailyWellness, user.id, day)
         row.total_steps = _first(s, "totalSteps")
         row.step_goal = _first(s, "dailyStepGoal", "stepGoal")
         row.total_distance_m = _first(s, "totalDistanceMeters", "totalDistance")
@@ -278,8 +285,8 @@ def sync_wellness(db: Session, days: int = 28) -> int:
 
 # --------------------------- composizione corporea ---------------------------
 
-def sync_body(db: Session, days: int = 90) -> int:
-    client = get_client()
+def sync_body(db: Session, user: User, days: int = 90) -> int:
+    client = get_client(user)
     end = date.today()
     start = end - timedelta(days=days)
     try:
@@ -299,7 +306,7 @@ def sync_body(db: Session, days: int = 90) -> int:
         except ValueError:
             continue
 
-        row, is_new = _upsert(db, BodyComposition, day)
+        row, is_new = _upsert(db, BodyComposition, user.id, day)
         row.weight_g = _first(e, "weight")
         row.bmi = _first(e, "bmi")
         row.body_fat_pct = _first(e, "bodyFat")
@@ -318,12 +325,14 @@ def sync_body(db: Session, days: int = 90) -> int:
 
 # --------------------------- sync completa ---------------------------
 
-def sync_all(db: Session, activity_limit: int = 50, days: int = 28) -> dict[str, int]:
-    """Esegue tutte le sincronizzazioni e restituisce i conteggi."""
+def sync_all(
+    db: Session, user: User, activity_limit: int = 50, days: int = 28
+) -> dict[str, int]:
+    """Esegue tutte le sincronizzazioni per un utente e restituisce i conteggi."""
     return {
-        "activities": sync_activities(db, activity_limit),
-        "wellness": sync_wellness(db, days),
-        "sleep": sync_sleep(db, days),
-        "training": sync_training(db, days),
-        "body": sync_body(db, max(days, 90)),
+        "activities": sync_activities(db, user, activity_limit),
+        "wellness": sync_wellness(db, user, days),
+        "sleep": sync_sleep(db, user, days),
+        "training": sync_training(db, user, days),
+        "body": sync_body(db, user, max(days, 90)),
     }

@@ -12,22 +12,35 @@ load_dotenv(BASE_DIR / ".env")
 
 
 class Settings:
-    """Impostazioni dell'applicazione, lette dall'ambiente."""
+    """Impostazioni dell'applicazione, lette dall'ambiente.
 
-    GARMIN_EMAIL: str = os.getenv("GARMIN_EMAIL", "")
-    GARMIN_PASSWORD: str = os.getenv("GARMIN_PASSWORD", "")
+    Le credenziali Garmin non stanno più qui: dalla v2 sono per-utente,
+    cifrate nel DB (vedi app/auth/security.py).
+    """
+
     GARMIN_TOKENSTORE: str = os.getenv("GARMIN_TOKENSTORE", "./data/garmin_tokens")
 
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./data/garmin_connector.db")
 
-    # AI (predisposto per il futuro)
+    # Auth multi-utente
+    SESSION_SECRET: str = os.getenv("SESSION_SECRET", "dev-only-change-me")
+    FERNET_KEY: str = os.getenv("FERNET_KEY", "")
+
+    # AI
     AI_PROVIDER: str = os.getenv("AI_PROVIDER", "stub")
+    ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
+    CLAUDE_MODEL_LIGHT: str = os.getenv("CLAUDE_MODEL_LIGHT", "claude-haiku-4-5-20251001")
+    CLAUDE_MODEL_HEAVY: str = os.getenv("CLAUDE_MODEL_HEAVY", "claude-sonnet-5")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     @property
-    def garmin_configured(self) -> bool:
-        return bool(self.GARMIN_EMAIL and self.GARMIN_PASSWORD)
+    def ai_configured(self) -> bool:
+        if self.AI_PROVIDER == "claude":
+            return bool(self.ANTHROPIC_API_KEY)
+        if self.AI_PROVIDER == "openai":
+            return bool(self.OPENAI_API_KEY)
+        return False
 
 
 settings = Settings()

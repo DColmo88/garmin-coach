@@ -1,17 +1,24 @@
-"""Wrapper attorno alla libreria `garminconnect`.
+"""Client Garmin per-utente.
 
-Gestisce il login con cache del token su disco: la prima volta usa
-email/password, le volte successive riusa il token salvato (niente
-re-login a ogni avvio). Nessun MFA (account senza 2FA).
+Ogni utente ha il proprio client autenticato e il proprio tokenstore su disco
+(`data/garmin_tokens/{user_id}/`). Il client resta in memoria finché il
+processo vive; il token su disco sopravvive ai riavvii, così non si rifà il
+login a ogni deploy.
+
+Nessun MFA: gli account devono avere la 2FA disattivata.
 """
 from __future__ import annotations
 
 import logging
+import threading
+from collections import defaultdict
 from pathlib import Path
 
 from garminconnect import Garmin
 
+from app.auth.security import decrypt_secret
 from app.config import settings
+from app.db.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -20,51 +27,61 @@ class GarminClientError(Exception):
     """Errore di login o di comunicazione con Garmin Connect."""
 
 
-_client: Garmin | None = None
+_clients: dict[int, Garmin] = {}
+_locks: dict[int, threading.Lock] = defaultdict(threading.Lock)
 
 
-def get_client() -> Garmin:
-    """Restituisce un client Garmin autenticato (singleton).
+def _tokenstore(user_id: int) -> str:
+    path = Path(settings.GARMIN_TOKENSTORE) / str(user_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
-    Strategia:
-    1. Prova a riusare il token salvato in GARMIN_TOKENSTORE.
-    2. Se non c'è o è scaduto, fa login con email/password e salva il token.
-    """
-    global _client
-    if _client is not None:
-        return _client
 
-    if not settings.garmin_configured:
-        raise GarminClientError(
-            "Credenziali Garmin mancanti: imposta GARMIN_EMAIL e GARMIN_PASSWORD nel file .env"
-        )
+def get_client(user: User) -> Garmin:
+    """Client autenticato per l'utente: riusa il token salvato, altrimenti login."""
+    if user.id in _clients:
+        return _clients[user.id]
 
-    tokenstore = settings.GARMIN_TOKENSTORE
-    Path(tokenstore).mkdir(parents=True, exist_ok=True)
+    with _locks[user.id]:
+        if user.id in _clients:  # un altro thread può averlo creato nel frattempo
+            return _clients[user.id]
 
-    # 1) Prova con il token salvato
+        tokenstore = _tokenstore(user.id)
+
+        try:
+            client = Garmin()
+            client.login(tokenstore)
+            logger.info("Login Garmin riuscito col token salvato (utente %s).", user.id)
+            _clients[user.id] = client
+            return client
+        except Exception as exc:  # token assente o scaduto
+            logger.info("Token utente %s non riutilizzabile (%s), login completo.", user.id, exc)
+
+        try:
+            password = decrypt_secret(user.garmin_password_encrypted)
+            client = Garmin(email=user.garmin_email, password=password)
+            client.login()
+            client.garth.dump(tokenstore)
+            logger.info("Login Garmin riuscito con credenziali (utente %s).", user.id)
+            _clients[user.id] = client
+            return client
+        except Exception as exc:
+            raise GarminClientError(
+                f"Login Garmin fallito per {user.garmin_email}: {exc}"
+            ) from exc
+
+
+def reset_client(user_id: int) -> None:
+    """Forza un nuovo login alla prossima chiamata (es. dopo un errore di auth)."""
+    _clients.pop(user_id, None)
+
+
+def validate_credentials(email: str, password: str) -> bool:
+    """Verifica le credenziali con un login reale. Usato in registrazione."""
     try:
-        client = Garmin()
-        client.login(tokenstore)
-        logger.info("Login Garmin riuscito riusando il token salvato.")
-        _client = client
-        return client
-    except Exception as exc:  # token assente/scaduto -> login completo
-        logger.info("Token non riutilizzabile (%s), eseguo login completo.", exc)
-
-    # 2) Login completo con credenziali, poi salva il token
-    try:
-        client = Garmin(email=settings.GARMIN_EMAIL, password=settings.GARMIN_PASSWORD)
+        client = Garmin(email=email, password=password)
         client.login()
-        client.garth.dump(tokenstore)
-        logger.info("Login Garmin riuscito con credenziali, token salvato in %s", tokenstore)
-        _client = client
-        return client
-    except Exception as exc:
-        raise GarminClientError(f"Login Garmin fallito: {exc}") from exc
-
-
-def reset_client() -> None:
-    """Forza un nuovo login alla prossima chiamata (es. dopo errore di auth)."""
-    global _client
-    _client = None
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Validazione credenziali fallita per %s: %s", email, exc)
+        return False

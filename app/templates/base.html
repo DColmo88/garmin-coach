@@ -27,9 +27,13 @@
       {% endfor %}
     </nav>
     <div class="sidebar-foot">
-      <span class="status {{ 'ok' if garmin_configured else 'warn' }}">
-        {{ '● Garmin OK' if garmin_configured else '● Configura .env' }}
-      </span>
+      <span class="status ok">● Garmin collegato</span>
+      {% if user %}
+      <div class="sidebar-user">
+        <span class="sidebar-user-name">{{ user.display_name or user.garmin_email }}</span>
+        <form method="post" action="/logout"><button type="submit" class="linkbtn">Esci</button></form>
+      </div>
+      {% endif %}
     </div>
   </aside>
 

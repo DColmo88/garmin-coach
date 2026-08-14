@@ -257,3 +257,19 @@ ul.kv .k { color: var(--muted); }
 .workout-card .w-type { font-size: 1.15rem; font-weight: 700; }
 .workout-card .w-meta { color: var(--text-dim); font-size: .9rem; margin: 6px 0; }
 .workout-card .w-note { color: var(--text); font-style: italic; opacity: .85; }
+
+/* ---------------- Utente in sidebar ---------------- */
+.sidebar-user {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+}
+.sidebar-user-name {
+  font-size: 12.5px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.linkbtn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--muted); font-size: 12.5px; text-decoration: underline;
+}
+.linkbtn:hover { color: var(--text); }

@@ -8,13 +8,13 @@ from sqlalchemy.orm import Session
 from app import queries as q
 
 
-def build_ai_context(db: Session, days: int = 28) -> dict[str, Any]:
-    """Raccoglie tutti i dati recenti in un dizionario pronto per l'AI."""
-    activities = q.recent_activities(db, 20)
-    wellness = q.wellness_series(db, days)
-    sleep = q.sleep_series(db, days)
-    training = q.training_series(db, days)
-    body = q.body_series(db, days)
+def build_ai_context(db: Session, user_id: int, days: int = 28) -> dict[str, Any]:
+    """Raccoglie tutti i dati recenti di un utente in un dizionario per l'AI."""
+    activities = q.recent_activities(db, user_id, 20)
+    wellness = q.wellness_series(db, user_id, days)
+    sleep = q.sleep_series(db, user_id, days)
+    training = q.training_series(db, user_id, days)
+    body = q.body_series(db, user_id, days)
 
     return {
         "period_days": days,
