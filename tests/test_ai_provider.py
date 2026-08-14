@@ -506,3 +506,55 @@ def test_claude_coach_skips_ai_without_data(claude):
              "load_ratio": None, "resting_hr_7d_avg": None, "resting_hr_30d_avg": None}
     out = claude.coach(empty, compute_readiness(empty), None)
     assert out.source == "deterministic"
+
+
+def test_preamble_is_separated_from_the_answer(claude):
+    """Il modello annuncia cosa fa, poi chiama un tool, poi risponde.
+
+    Senza uno stacco le due parti si incollano: «…do un'occhiata.Il quadro è».
+    """
+    responses = [
+        _msg([_text_block("Ti do un'occhiata."), _tool_block("get_activities", {})]),
+        _msg([_text_block("Hai corso 3 volte.")]),
+    ]
+    chunks = [["Ti do un'occhiata."], ["Hai corso 3 volte."]]
+    calls = {"n": 0}
+
+    def fake_stream(**kwargs):
+        i = calls["n"]
+        calls["n"] += 1
+        return FakeStream(responses[i], chunks[i])
+
+    claude.client = SimpleNamespace(messages=SimpleNamespace(stream=fake_stream))
+
+    text = "".join(
+        e.text for e in claude.chat("sys", [{"role": "user", "content": "?"}],
+                                    TOOLS, lambda n, a: "dati")
+        if isinstance(e, TextChunk)
+    )
+    assert "occhiata.Hai" not in text
+    assert "\n\n" in text
+
+
+def test_no_stray_separator_without_a_preamble(claude):
+    """Se il modello non scrive nulla prima del tool, niente riga vuota iniziale."""
+    responses = [
+        _msg([_tool_block("get_activities", {})]),
+        _msg([_text_block("Hai corso 3 volte.")]),
+    ]
+    chunks = [[], ["Hai corso 3 volte."]]
+    calls = {"n": 0}
+
+    def fake_stream(**kwargs):
+        i = calls["n"]
+        calls["n"] += 1
+        return FakeStream(responses[i], chunks[i])
+
+    claude.client = SimpleNamespace(messages=SimpleNamespace(stream=fake_stream))
+
+    text = "".join(
+        e.text for e in claude.chat("sys", [{"role": "user", "content": "?"}],
+                                    TOOLS, lambda n, a: "dati")
+        if isinstance(e, TextChunk)
+    )
+    assert text == "Hai corso 3 volte."

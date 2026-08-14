@@ -152,8 +152,12 @@ class ClaudeProvider(AIProvider):
         tool_defs = self._to_tools(tools)
         tokens_in = tokens_out = 0
         tools_used: list[str] = []
+        # Il modello a volte annuncia cosa sta per fare prima di chiamare un
+        # tool: senza uno stacco, quella frase si incolla alla risposta vera.
+        text_before_tools = False
 
         for _ in range(max_rounds):
+            first_chunk_of_round = True
             try:
                 with self.client.messages.stream(
                     model=self.light,
@@ -167,6 +171,10 @@ class ClaudeProvider(AIProvider):
                             event.type == "content_block_delta"
                             and event.delta.type == "text_delta"
                         ):
+                            if first_chunk_of_round and text_before_tools:
+                                yield TextChunk("\n\n")
+                                text_before_tools = False
+                            first_chunk_of_round = False
                             yield TextChunk(event.delta.text)
                     response = stream.get_final_message()
             except Exception as exc:  # noqa: BLE001
@@ -180,6 +188,9 @@ class ClaudeProvider(AIProvider):
             if not tool_uses:
                 yield Finished(tokens_in, tokens_out, self.light, tools_used)
                 return
+
+            if any(b.type == "text" and b.text.strip() for b in response.content):
+                text_before_tools = True
 
             history.append({"role": "assistant", "content": response.content})
             results = []
