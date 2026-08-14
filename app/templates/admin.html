@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Amministrazione · Garmin Coach{% endblock %}
+{% block heading %}Amministrazione{% endblock %}
+
+{% block content %}
+
+{% if created_code %}
+  <div class="banner ok">
+    Codice invito creato: <code class="invite-code">{{ created_code }}</code>
+  </div>
+{% endif %}
+
+<section class="admin-totals">
+  <div class="total-card">
+    <span class="total-label">Spesa AI · 30 giorni</span>
+    <span class="total-value">${{ '%.2f' | format(total_30d.cost_usd) }}</span>
+    <span class="total-note">{{ total_30d.calls }} chiamate</span>
+  </div>
+  <div class="total-card">
+    <span class="total-label">Spesa AI · sempre</span>
+    <span class="total-value">${{ '%.2f' | format(total_all.cost_usd) }}</span>
+    <span class="total-note">
+      {{ '{:,}'.format(total_all.tokens_in + total_all.tokens_out).replace(',', '.') }} token
+    </span>
+  </div>
+  <div class="total-card">
+    <span class="total-label">Utenti</span>
+    <span class="total-value">{{ rows | length }}</span>
+    <span class="total-note">
+      {{ rows | selectattr('user.is_active') | list | length }} attivi
+    </span>
+  </div>
+</section>
+
+<h2 class="section-title">Utenti</h2>
+<div class="table-wrap">
+  <table class="admin-table">
+    <thead>
+      <tr>
+        <th>Utente</th>
+        <th>Ultima sync</th>
+        <th>Attività</th>
+        <th>Chat</th>
+        <th>Spesa 30gg</th>
+        <th>Quote</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="{{ 'disabled' if not r.user.is_active else '' }}">
+        <td>
+          <span class="admin-email">{{ r.user.garmin_email }}</span>
+          {% if r.user.is_admin %}<span class="tag">admin</span>{% endif %}
+          {% if not r.user.is_active %}<span class="tag off">disattivato</span>{% endif %}
+        </td>
+        <td>
+          {% if r.user.last_sync_at %}
+            {{ r.user.last_sync_at.strftime('%d/%m %H:%M') }}
+            {% if r.user.sync_failures %}
+              <span class="tag off">{{ r.user.sync_failures }} errori</span>
+            {% endif %}
+          {% else %}mai{% endif %}
+        </td>
+        <td>{{ r.activities }}</td>
+        <td>{{ r.conversations }}</td>
+        <td>${{ '%.2f' | format(r.usage_30d.cost_usd) }}</td>
+        <td>
+          <form method="post" action="/admin/users/{{ r.user.id }}/quota" class="quota-form">
+            <input type="number" name="chat_daily" value="{{ r.user.ai_quota_chat_daily }}"
+                   min="0" title="messaggi chat al giorno" />
+            <input type="number" name="plans_monthly" value="{{ r.user.ai_quota_plans_monthly }}"
+                   min="0" title="piani al mese" />
+            <button type="submit" class="btn small">Salva</button>
+          </form>
+        </td>
+        <td>
+          {% if r.user.id != user.id %}
+          <form method="post" action="/admin/users/{{ r.user.id }}/toggle">
+            <button type="submit" class="linkbtn">
+              {{ 'Riattiva' if not r.user.is_active else 'Disattiva' }}
+            </button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="section-title">Inviti</h2>
+<form method="post" action="/admin/invite" class="invite-form">
+  <label for="expires">Scadenza</label>
+  <select id="expires" name="expires_days">
+    <option value="7">7 giorni</option>
+    <option value="30" selected>30 giorni</option>
+    <option value="90">90 giorni</option>
+    <option value="0">nessuna</option>
+  </select>
+  <button type="submit" class="btn primary">Crea invito</button>
+</form>
+
+{% if invites %}
+<div class="table-wrap">
+  <table class="admin-table">
+    <thead>
+      <tr><th>Codice</th><th>Stato</th><th>Creato</th></tr>
+    </thead>
+    <tbody>
+      {% for i in invites %}
+      <tr>
+        <td><code class="invite-code">{{ i.code }}</code></td>
+        <td>
+          {% if i.used_by_id %}
+            usato da {{ used_by.get(i.used_by_id, '—') }}
+          {% elif i.expires_at and i.expires_at < now %}
+            <span class="tag off">scaduto</span>
+          {% else %}
+            <span class="tag ok">disponibile</span>
+            {% if i.expires_at %}· fino al {{ i.expires_at.strftime('%d/%m/%Y') }}{% endif %}
+          {% endif %}
+        </td>
+        <td>{{ i.created_at.strftime('%d/%m/%Y') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if notifications %}
+<h2 class="section-title">Ultime notifiche inviate</h2>
+<div class="notif-log">
+  {% for n in notifications %}
+  <div class="notif-row {{ 'failed' if not n.ok else '' }}">
+    <span class="notif-when">{{ n.sent_at.strftime('%d/%m %H:%M') }}</span>
+    <span class="notif-title">{{ n.title }}</span>
+    <span class="notif-channel">{{ n.channel }}{{ '' if n.ok else ' · non riuscita' }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% endblock %}

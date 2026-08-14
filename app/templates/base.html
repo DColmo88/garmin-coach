@@ -43,6 +43,11 @@
           <span class="nav-icon">{{ icon }}</span><span class="nav-label">{{ label }}</span>
         </a>
       {% endfor %}
+      {% if user and user.is_admin %}
+        <a href="/admin" class="{{ 'active' if active == 'admin' else '' }}">
+          <span class="nav-icon">🛠</span><span class="nav-label">Amministrazione</span>
+        </a>
+      {% endif %}
     </nav>
     <div class="sidebar-foot">
       <span class="status ok">● Garmin collegato</span>

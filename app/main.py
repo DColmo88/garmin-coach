@@ -18,6 +18,7 @@ from app.auth.session import LoginRequired, require_user
 from app.db.database import get_session, init_db
 from app.db.models import User
 from app.pipeline import run_for_user
+from app.routers import admin as admin_router
 from app.routers import auth as auth_router
 from app.routers import chat as chat_router
 from app.routers import pages
@@ -31,6 +32,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="Garmin Coach")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.include_router(admin_router.router)
 app.include_router(auth_router.router)
 app.include_router(chat_router.router)
 app.include_router(settings_router.router)
@@ -41,6 +43,12 @@ app.include_router(pages.router)
 def handle_login_required(request: Request, exc: LoginRequired):
     """Chi non ha una sessione valida finisce sulla pagina di accesso."""
     return RedirectResponse("/login", status_code=303)
+
+
+@app.exception_handler(admin_router.NotAdmin)
+def handle_not_admin(request: Request, exc: admin_router.NotAdmin):
+    """Chi non e' amministratore non deve nemmeno sapere che /admin esiste."""
+    return RedirectResponse("/coach", status_code=303)
 
 
 @app.on_event("startup")

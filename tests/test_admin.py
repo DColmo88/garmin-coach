@@ -1,0 +1,229 @@
+"""Pagina di amministrazione: accesso, inviti, quote, disattivazione."""
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+
+import pytest
+from sqlalchemy import select
+
+from app.db.models import AIUsageLog, InviteCode, User
+
+
+def admin_of(test_db) -> User:
+    """L'utente creato da `logged_client` è il primo, quindi admin."""
+    session = test_db()
+    try:
+        return session.scalar(select(User).where(User.garmin_email == "test@x.it"))
+    finally:
+        session.close()
+
+
+@pytest.fixture()
+def second_user(test_db) -> User:
+    session = test_db()
+    user = User(garmin_email="secondo@x.it", garmin_password_encrypted="e",
+                garmin_password_hash="h")
+    session.add(user)
+    session.commit()
+    user_id = user.id
+    session.close()
+
+    session = test_db()
+    try:
+        return session.get(User, user_id)
+    finally:
+        session.close()
+
+
+# ============================================================================
+# Accesso
+# ============================================================================
+
+def test_admin_requires_login(client):
+    assert client.get("/admin").status_code == 303
+
+
+def test_first_user_is_admin_and_can_open_the_page(logged_client, test_db):
+    assert admin_of(test_db).is_admin is True
+    assert logged_client.get("/admin").status_code == 200
+
+
+def test_non_admin_is_sent_away(logged_client, test_db):
+    session = test_db()
+    user = session.scalar(select(User).where(User.garmin_email == "test@x.it"))
+    user.is_admin = False
+    session.commit()
+    session.close()
+
+    response = logged_client.get("/admin")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/coach"
+
+
+def test_admin_link_only_shows_for_admins(logged_client, test_db):
+    assert 'href="/admin"' in logged_client.get("/coach").text
+
+    session = test_db()
+    user = session.scalar(select(User).where(User.garmin_email == "test@x.it"))
+    user.is_admin = False
+    session.commit()
+    session.close()
+
+    assert 'href="/admin"' not in logged_client.get("/coach").text
+
+
+def test_non_admin_cannot_use_the_actions(logged_client, test_db, second_user):
+    session = test_db()
+    user = session.scalar(select(User).where(User.garmin_email == "test@x.it"))
+    user.is_admin = False
+    session.commit()
+    before = session.query(InviteCode).count()
+    session.close()
+
+    assert logged_client.post("/admin/invite", data={"expires_days": 30}).status_code == 303
+
+    session = test_db()
+    assert session.query(InviteCode).count() == before  # nessun invito creato
+    session.close()
+
+
+# ============================================================================
+# Contenuto
+# ============================================================================
+
+def test_page_lists_users(logged_client, second_user):
+    page = logged_client.get("/admin").text
+    assert "test@x.it" in page and "secondo@x.it" in page
+
+
+def test_page_shows_ai_spend(logged_client, test_db):
+    session = test_db()
+    user = session.scalar(select(User).where(User.garmin_email == "test@x.it"))
+    session.add(AIUsageLog(user_id=user.id, day=date.today(), kind="chat",
+                           model="claude-haiku-4-5",
+                           tokens_in=1_000_000, tokens_out=200_000))
+    session.commit()
+    session.close()
+
+    page = logged_client.get("/admin").text
+    assert "Spesa AI" in page
+    assert "$2.00" in page  # 1.00 in + 1.00 out (200k × 5$/M)
+
+
+def test_page_survives_an_empty_database(logged_client):
+    assert logged_client.get("/admin").status_code == 200
+
+
+# ============================================================================
+# Inviti
+# ============================================================================
+
+def test_create_invite(logged_client, test_db):
+    response = logged_client.post("/admin/invite", data={"expires_days": 30})
+    assert response.status_code == 303
+    code = response.headers["location"].split("created=")[1]
+
+    session = test_db()
+    invite = session.query(InviteCode).filter_by(code=code).one()
+    assert invite.expires_at is not None
+    assert invite.created_by_id is not None
+    session.close()
+
+
+def test_create_invite_without_expiry(logged_client, test_db):
+    response = logged_client.post("/admin/invite", data={"expires_days": 0})
+    code = response.headers["location"].split("created=")[1]
+
+    session = test_db()
+    assert session.query(InviteCode).filter_by(code=code).one().expires_at is None
+    session.close()
+
+
+def test_created_code_banner_appears_only_after_creation(logged_client):
+    response = logged_client.post("/admin/invite", data={"expires_days": 7})
+    code = response.headers["location"].split("created=")[1]
+
+    with_banner = logged_client.get(f"/admin?created={code}").text
+    assert "Codice invito creato" in with_banner and code in with_banner
+
+    # Ricaricando senza il parametro il banner sparisce, ma il codice resta
+    # nell'elenco degli inviti: e' li' che si va a ripescarlo.
+    plain = logged_client.get("/admin").text
+    assert "Codice invito creato" not in plain
+    assert code in plain
+
+
+def test_invite_created_here_actually_works(logged_client, client, test_db):
+    """Il giro completo: creo l'invito, un nuovo utente lo usa."""
+    response = logged_client.post("/admin/invite", data={"expires_days": 30})
+    code = response.headers["location"].split("created=")[1]
+
+    logged_client.post("/logout")
+    login = logged_client.post("/login", data={
+        "email": "nuovo@x.it", "password": "pw", "invite_code": code,
+    })
+    assert login.status_code == 303
+
+    session = test_db()
+    assert session.query(User).filter_by(garmin_email="nuovo@x.it").count() == 1
+    session.close()
+
+
+# ============================================================================
+# Quote e stato degli utenti
+# ============================================================================
+
+def test_set_quota(logged_client, test_db, second_user):
+    logged_client.post(f"/admin/users/{second_user.id}/quota",
+                       data={"chat_daily": 5, "plans_monthly": 1})
+
+    session = test_db()
+    user = session.get(User, second_user.id)
+    assert user.ai_quota_chat_daily == 5 and user.ai_quota_plans_monthly == 1
+    session.close()
+
+
+def test_negative_quota_becomes_zero(logged_client, test_db, second_user):
+    logged_client.post(f"/admin/users/{second_user.id}/quota",
+                       data={"chat_daily": -10, "plans_monthly": -3})
+
+    session = test_db()
+    user = session.get(User, second_user.id)
+    assert user.ai_quota_chat_daily == 0 and user.ai_quota_plans_monthly == 0
+    session.close()
+
+
+def test_toggle_disables_and_reenables(logged_client, test_db, second_user):
+    logged_client.post(f"/admin/users/{second_user.id}/toggle")
+    session = test_db()
+    assert session.get(User, second_user.id).is_active is False
+    session.close()
+
+    logged_client.post(f"/admin/users/{second_user.id}/toggle")
+    session = test_db()
+    assert session.get(User, second_user.id).is_active is True
+    session.close()
+
+
+def test_admin_cannot_lock_themselves_out(logged_client, test_db):
+    admin = admin_of(test_db)
+    logged_client.post(f"/admin/users/{admin.id}/toggle")
+    assert admin_of(test_db).is_active is True
+
+
+def test_disabled_user_cannot_log_in(logged_client, client, test_db, second_user):
+    """La disattivazione deve avere effetto sul login, non solo sulla lista."""
+    from app.auth import service
+
+    logged_client.post(f"/admin/users/{second_user.id}/toggle")
+
+    session = test_db()
+    user = session.get(User, second_user.id)
+    with pytest.raises(service.AccountDisabled):
+        service.authenticate(session, "secondo@x.it", "pw",
+                             garmin_validator=lambda e, p: True)
+    session.close()
+
+
+def test_toggle_of_a_missing_user_does_not_crash(logged_client):
+    assert logged_client.post("/admin/users/9999/toggle").status_code == 303

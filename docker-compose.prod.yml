@@ -1,20 +1,63 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: garmin-postgres
+    environment:
+      POSTGRES_DB: garmin
+      POSTGRES_USER: garmin
+      # La password arriva da .env.prod: non deve stare in git.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?serve POSTGRES_PASSWORD in .env.prod}
+    volumes:
+      - garmin_pg_data:/var/lib/postgresql/data
+    networks:
+      - garmin_internal
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U garmin -d garmin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   garmin-app:
     build: .
     container_name: garmin-app
     env_file:
       - .env.prod
+    # Le migrazioni girano prima dell'avvio: lo schema è sempre allineato
+    # al codice appena deployato.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
     volumes:
       - garmin_data:/app/data
     networks:
       - garmin_internal
       - caddy_proxy
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     deploy:
       resources:
         limits:
-          memory: 256M
-          cpus: '0.5'
+          memory: 512M
+          cpus: '0.7'
     logging:
       driver: json-file
       options:
@@ -22,7 +65,8 @@ services:
         max-file: "3"
 
 volumes:
-  garmin_data:
+  garmin_data:      # token Garmin per utente
+  garmin_pg_data:   # database
 
 networks:
   garmin_internal:

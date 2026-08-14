@@ -1,0 +1,34 @@
+# Configurazione Caddy per Garmin Coach.
+#
+# Va importata dal Caddyfile principale con UNA riga:
+#     import /etc/caddy/sites/garmin.caddy
+#
+# In questo modo i blocchi del bot condominio restano intatti: si tocca il
+# Caddyfile una volta sola, poi si lavora solo su questo file.
+#
+# Il basic_auth non c'è più: l'app ha il suo login con le credenziali Garmin.
+
+garmin.46.224.17.241.sslip.io {
+	encode zstd gzip
+
+	# Lo streaming della chat non va bufferizzato, altrimenti la risposta
+	# arriva tutta insieme alla fine invece che parola per parola.
+	reverse_proxy garmin-app:8000 {
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/garmin.log {
+			roll_size 10mb
+			roll_keep 3
+		}
+	}
+}
