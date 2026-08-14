@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}Coach · Garmin Coach{% endblock %}
+{% block heading %}Parla col coach{% endblock %}
+
+{% block content %}
+<div class="chat-layout">
+
+  <aside class="chat-side">
+    <form method="post" action="/chat/new">
+      <button type="submit" class="btn primary chat-new">+ Nuova conversazione</button>
+    </form>
+
+    <div class="chat-list">
+      {% for c in conversations %}
+        <a href="/chat?conversation={{ c.id }}"
+           class="chat-list-item {{ 'active' if current and c.id == current.id else '' }}">
+          <span class="chat-list-title">{{ c.title }}</span>
+          <span class="chat-list-date">{{ c.updated_at.strftime('%d/%m') }}</span>
+        </a>
+      {% else %}
+        <p class="chat-empty-list">Nessuna conversazione.</p>
+      {% endfor %}
+    </div>
+
+    {% if current %}
+    <form method="post" action="/chat/{{ current.id }}/delete" class="chat-delete"
+          onsubmit="return confirm('Eliminare questa conversazione?')">
+      <button type="submit" class="linkbtn">Elimina conversazione</button>
+    </form>
+    {% endif %}
+  </aside>
+
+  <section class="chat-main">
+    {% if not chat_available %}
+      <div class="banner">
+        🤖 La chat non è attiva: il provider AI in uso è <b>{{ provider_name }}</b>.
+        Imposta <code>AI_PROVIDER</code> e la chiave corrispondente nel file <code>.env</code>.
+      </div>
+    {% endif %}
+
+    <div class="chat-thread" id="thread">
+      {% if not messages %}
+        <div class="chat-welcome">
+          <div class="chat-welcome-icon">🎯</div>
+          <h2>Il coach conosce i tuoi dati</h2>
+          <p>
+            Chiedi quello che vuoi sui tuoi allenamenti, sul sonno o sui progressi.
+            Se serve un dato di mesi fa, se lo va a prendere da solo.
+          </p>
+          <div class="chat-suggestions">
+            {% for s in suggestions %}
+              <button type="button" class="chat-suggestion" data-text="{{ s }}">{{ s }}</button>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      {% for m in messages %}
+        <div class="msg {{ m.role }}">
+          {% if m.role == 'assistant' and m.tools_used_json %}
+            <div class="msg-tools">
+              🔎 Ha consultato: {{ m.tools_used_json | unique | join(', ') }}
+            </div>
+          {% endif %}
+          <div class="msg-body">{{ m.content }}</div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <form class="chat-composer" id="composer">
+      <input type="hidden" id="conversationId" value="{{ current.id if current else '' }}" />
+      <textarea id="input" rows="1" placeholder="Chiedi qualcosa al coach…"
+                {{ 'disabled' if not chat_available else '' }}></textarea>
+      <button type="submit" id="sendBtn" class="btn primary"
+              {{ 'disabled' if not chat_available else '' }}>Invia</button>
+    </form>
+    <p class="chat-quota" id="quota">
+      {{ remaining }} messaggi rimasti oggi (su {{ quota }})
+    </p>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const thread = document.getElementById("thread");
+  const composer = document.getElementById("composer");
+  const input = document.getElementById("input");
+  const sendBtn = document.getElementById("sendBtn");
+  const quotaLabel = document.getElementById("quota");
+  const conversationField = document.getElementById("conversationId");
+
+  // La textarea cresce col testo invece di scrollare.
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 180) + "px";
+  });
+
+  // Invio con Enter, a capo con Shift+Enter.
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+
+  document.querySelectorAll(".chat-suggestion").forEach((b) =>
+    b.addEventListener("click", () => {
+      input.value = b.dataset.text;
+      composer.requestSubmit();
+    })
+  );
+
+  function scrollToBottom() {
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  function addMessage(role, text) {
+    document.querySelector(".chat-welcome")?.remove();
+    const el = document.createElement("div");
+    el.className = "msg " + role;
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.textContent = text;
+    el.appendChild(body);
+    thread.appendChild(el);
+    scrollToBottom();
+    return body;
+  }
+
+  composer.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = input.value.trim();
+    if (!text || sendBtn.disabled) return;
+
+    addMessage("user", text);
+    input.value = "";
+    input.style.height = "auto";
+    sendBtn.disabled = true;
+
+    const bubble = addMessage("assistant pending", "");
+    const status = document.createElement("div");
+    status.className = "msg-status";
+    status.textContent = "Il coach sta pensando…";
+    bubble.parentElement.prepend(status);
+
+    const payload = new URLSearchParams({ message: text });
+    const conversationId = conversationField.value;
+    if (conversationId) payload.append("conversation_id", conversationId);
+
+    try {
+      const response = await fetch("/chat/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: payload,
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let answer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Gli eventi SSE sono separati da una riga vuota.
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop();
+
+        for (const block of blocks) {
+          const eventName = block.match(/^event: (.+)$/m)?.[1];
+          const rawData = block.match(/^data: (.+)$/m)?.[1];
+          if (!eventName || !rawData) continue;
+          const data = JSON.parse(rawData);
+
+          if (eventName === "chunk") {
+            answer += data.text;
+            status.remove();
+            bubble.textContent = answer;
+            bubble.parentElement.classList.remove("pending");
+            scrollToBottom();
+          } else if (eventName === "tool") {
+            status.textContent = "Sto consultando " + data.label + "…";
+            scrollToBottom();
+          } else if (eventName === "start") {
+            conversationField.value = data.conversation_id;
+          } else if (eventName === "done") {
+            status.remove();
+            quotaLabel.textContent =
+              data.remaining + " messaggi rimasti oggi";
+          } else if (eventName === "error") {
+            status.remove();
+            bubble.parentElement.classList.remove("pending");
+            bubble.parentElement.classList.add("error");
+            bubble.textContent = data.message;
+          }
+        }
+      }
+    } catch (err) {
+      status.remove();
+      bubble.parentElement.classList.add("error");
+      bubble.textContent = "Errore di rete: " + err.message;
+    } finally {
+      sendBtn.disabled = false;
+      input.focus();
+      scrollToBottom();
+    }
+  });
+
+  scrollToBottom();
+</script>
+{% endblock %}

@@ -33,7 +33,16 @@ def test_db(monkeypatch, tmp_path):
     import app.db.models  # noqa: F401 — registra i modelli su Base
 
     Base.metadata.create_all(engine)
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    # Il codice che apre una sessione per conto suo (scheduler, streaming SSE)
+    # non passa dalla dependency di FastAPI. Senza questo patch scriverebbe sul
+    # database reale durante i test.
+    monkeypatch.setattr("app.db.database.SessionLocal", factory)
+    monkeypatch.setattr("app.routers.chat.SessionLocal", factory)
+    monkeypatch.setattr("app.scheduler.SessionLocal", factory)
+
+    return factory
 
 
 @pytest.fixture()

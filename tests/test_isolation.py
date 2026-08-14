@@ -146,3 +146,26 @@ def test_live_service_cache_is_keyed_by_user(db, two_users):
 
     service.clear_cache(alice.id)
     assert service._cached(bob.id, "profilo", lambda: "MAI") == "dati-di-bob"
+
+
+# --------------------------- protezione del DB reale ---------------------------
+
+def test_session_factory_points_at_the_test_database(test_db):
+    """Guardia: chi apre una sessione per conto suo deve finire sul DB di test.
+
+    Lo scheditore e lo streaming SSE non passano dalla dependency di FastAPI.
+    Se questo test fallisce, una suite può scrivere sul database vero.
+    """
+    import app.db.database as database
+    import app.routers.chat as chat_router
+    import app.scheduler as scheduler
+
+    real_url = "data/garmin_connector.db"
+    for module, name in (
+        (database, "SessionLocal"),
+        (chat_router, "SessionLocal"),
+        (scheduler, "SessionLocal"),
+    ):
+        factory = getattr(module, name)
+        url = str(factory.kw["bind"].url)
+        assert real_url not in url, f"{module.__name__}.{name} punta al DB reale: {url}"
