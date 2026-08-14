@@ -71,6 +71,34 @@
   <p class="hero-msg">Nessun insight rilevante oggi — continua a sincronizzare i dati.</p>
 {% endif %}
 
+{% if progress %}
+<section class="progress-strip">
+  <div class="ps-item">
+    <span class="ps-value">🔥 {{ progress.current_streak }}</span>
+    <span class="ps-label">{{ 'giorno di fila' if progress.current_streak == 1 else 'giorni di fila' }}</span>
+  </div>
+  <div class="ps-item">
+    <span class="ps-value">{{ progress.level_icon }} {{ progress.level }}</span>
+    <span class="ps-label">{{ '{:,}'.format(progress.total_xp).replace(',', '.') }} XP</span>
+  </div>
+  <div class="ps-level">
+    <div class="ps-bar"><span style="width: {{ progress.level_progress_pct }}%"></span></div>
+    <span class="ps-label">
+      {% if progress.next_level %}
+        {{ '{:,}'.format(progress.xp_to_next).replace(',', '.') }} XP a {{ progress.next_level }}
+      {% else %}livello massimo{% endif %}
+    </span>
+  </div>
+  {% if progress.badges %}
+  <div class="ps-badges">
+    {% for b in progress.badges[-4:] %}
+      <span class="ps-badge" title="{{ b.title }} — {{ b.description }}">{{ b.icon }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% endif %}
+
 <h2 style="margin:20px 0 12px">Allenamento suggerito</h2>
 <div class="workout-card">
   <div class="w-head">

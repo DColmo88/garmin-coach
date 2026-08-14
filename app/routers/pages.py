@@ -26,6 +26,7 @@ from app.db.models import User
 from app.garmin import service
 from app.garmin.client import GarminClientError
 from app.pipeline import refresh_daily_cache
+from app import training
 from app.templating import templates
 
 router = APIRouter()
@@ -80,12 +81,16 @@ def coach(request: Request, db: Session = Depends(get_session),
         {"value": _r(snap.get("body_battery_high")), "label": "Battery"},
         {"value": _r(snap.get("vo2max_latest")), "label": "VO₂max", "vmax": 70},
     ]
+    from app import gamification
+
+    progress = gamification.progress_of(db, user)
     in_range = sum(1 for f in readiness.breakdown if f.color == "green")
     return templates.TemplateResponse(
         "coach.html",
         _ctx(request, "coach", user, snap=snap, readiness=readiness, insights=insights,
              coaching=coaching, mini=mini, in_range=in_range,
              goal=goal, days_left=goals.days_to_target(goal) if goal else None,
+             progress=progress,
              total_metrics=len(readiness.breakdown)),
     )
 
@@ -340,6 +345,62 @@ async def goals_close(request: Request, db: Session = Depends(get_session),
     form = await request.form()
     goals.close_goal(db, user.id, outcome=str(form.get("outcome") or ""))
     return RedirectResponse("/goals", status_code=303)
+
+
+# --------------------------- Piano di allenamento ---------------------------
+
+@router.get("/plan", response_class=HTMLResponse)
+def plan_page(request: Request, db: Session = Depends(get_session),
+              user: User = Depends(require_user), error: str = ""):
+    plan = training.get_active_plan(db, user.id)
+    goal = goals.active_goal(db, user.id)
+
+    week = current = session = None
+    if plan is not None:
+        current = training.current_week_number(plan)
+        week = training.week_data(plan, current)
+        cached = refresh_daily_cache(db, user)
+        score = int(cached.readiness_score) if cached.readiness_score is not None else None
+        session = training.today_session(plan, score)
+
+    from app.ai import usage
+
+    return templates.TemplateResponse(
+        "plan.html",
+        _ctx(request, "plan", user,
+             plan=plan, goal=goal, week=week, current_week=current,
+             today_session=session,
+             weekdays=training.WEEKDAYS,
+             today_name=training.WEEKDAYS[date.today().weekday()],
+             progress=training.progress_pct(plan) if plan else 0,
+             plans_left=usage.remaining(db, user, "plan"),
+             error=error),
+    )
+
+
+@router.post("/plan/generate")
+def plan_generate(db: Session = Depends(get_session),
+                  user: User = Depends(require_user)):
+    """Genera il piano. È l'unica azione che consuma la quota mensile."""
+    from app.ai import usage
+
+    try:
+        training.generate_plan(db, user)
+    except usage.QuotaExceeded as exc:
+        return RedirectResponse(
+            f"/plan?error=Hai esaurito i piani di questo mese ({exc.used}/{exc.limit}).",
+            status_code=303,
+        )
+    except training.PlanError as exc:
+        return RedirectResponse(f"/plan?error={exc}", status_code=303)
+    return RedirectResponse("/plan", status_code=303)
+
+
+@router.post("/plan/archive")
+def plan_archive(db: Session = Depends(get_session),
+                 user: User = Depends(require_user)):
+    training.archive_plan(db, user.id)
+    return RedirectResponse("/plan", status_code=303)
 
 
 # --------------------------- AI ---------------------------

@@ -124,7 +124,16 @@ def chat_system_prompt(
 # --------------------------- piani di allenamento ---------------------------
 
 
-def plan_system_prompt() -> str:
+def plan_system_prompt(structured: bool = False) -> str:
+    formato = (
+        "Rispondi solo con il JSON richiesto, senza testo attorno. Una voce per "
+        "ogni giorno della settimana, riposo compreso: il calendario deve essere "
+        "completo."
+        if structured else
+        "Formato: markdown. Una tabella per settimana (giorno, tipo di sessione, "
+        "durata o distanza, zona FC, nota). Prima delle tabelle, tre righe che "
+        "spiegano la logica del piano."
+    )
     return (
         "Sei un allenatore di corsa certificato. Costruisci piani di allenamento "
         "realistici a partire dai dati reali dell'atleta.\n\n"
@@ -136,9 +145,7 @@ def plan_system_prompt() -> str:
         "- Parti dal volume che l'atleta regge davvero adesso, non da quello che vorrebbe.\n"
         "- Se i dati dicono che l'obiettivo non è raggiungibile nei tempi, dillo "
         "in apertura e proponi un traguardo intermedio.\n\n"
-        "Formato: markdown. Una tabella per settimana (giorno, tipo di sessione, "
-        "durata o distanza, zona FC, nota). Prima delle tabelle, tre righe che "
-        "spiegano la logica del piano."
+        + formato
     )
 
 

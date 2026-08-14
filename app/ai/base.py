@@ -78,8 +78,15 @@ class AIProvider(ABC):
         return False
 
     @abstractmethod
-    def generate_training_plan(self, context: dict[str, Any], goal: str) -> str:
-        """Genera un piano di allenamento in markdown."""
+    def generate_training_plan(
+        self, context: dict[str, Any], goal: str, schema: dict[str, Any] | None = None
+    ) -> str | dict[str, Any]:
+        """Genera un piano di allenamento.
+
+        Senza `schema` restituisce markdown. Con uno schema JSON restituisce un
+        dizionario che lo rispetta: è quello che serve per disegnare un
+        calendario invece di un muro di testo.
+        """
         raise NotImplementedError
 
     def coach(self, snap: dict, readiness, goal=None):  # type: ignore[no-untyped-def]

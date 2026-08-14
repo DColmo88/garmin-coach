@@ -39,6 +39,8 @@ class PipelineResult:
     synced: dict[str, int] | None = None
     readiness: int | None = None
     insights: int = 0
+    xp: int = 0
+    streak: int = 0
     notifications: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -140,6 +142,19 @@ def do_coaching(db: Session, user: User, result: PipelineResult) -> None:
         result.errors.append(f"coaching: {exc}")
 
 
+def do_gamification(db: Session, user: User, result: PipelineResult) -> None:
+    """Ricalcola XP, serie e traguardi. Deterministico, dai dati appena arrivati."""
+    try:
+        from app import gamification
+
+        state = gamification.recompute(db, user)
+        result.xp = state.total_xp
+        result.streak = state.current_streak
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Gamification fallita per utente %s", user.id)
+        result.errors.append(f"gamification: {exc}")
+
+
 def do_notifications(db: Session, user: User, result: PipelineResult) -> None:
     """Valuta le regole di notifica e invia sui canali scelti dall'utente."""
     try:
@@ -161,6 +176,7 @@ def run_for_user(db: Session, user: User, *, with_sync: bool = True) -> Pipeline
     if with_sync:
         do_sync(db, user, result)
     do_coaching(db, user, result)
+    do_gamification(db, user, result)
     do_notifications(db, user, result)
     logger.info(
         "Pipeline utente %s: sync=%s readiness=%s insight=%s notifiche=%s errori=%s",

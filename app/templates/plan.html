@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Piano · Garmin Coach{% endblock %}
+{% block heading %}Piano di allenamento{% endblock %}
+
+{% block content %}
+
+{% if error %}
+  <div class="banner">{{ error }}</div>
+{% endif %}
+
+{% if not plan %}
+
+  <section class="plan-empty">
+    <h2>Non hai un piano attivo.</h2>
+    {% if goal %}
+      <p>
+        Il coach ne costruisce uno su misura per <b>{{ goal.title }}</b>, partendo
+        dal volume che regge davvero adesso — non da quello che vorresti reggere.
+      </p>
+      <form method="post" action="/plan/generate">
+        <button type="submit" class="btn primary">Genera il piano</button>
+      </form>
+      <p class="plan-quota">
+        {{ plans_left }} generazioni disponibili questo mese.
+        Ci vuole qualche secondo.
+      </p>
+    {% else %}
+      <p>
+        Prima serve un obiettivo: senza, un piano sarebbe generico quanto uno
+        preso da internet.
+      </p>
+      <a href="/goals" class="btn primary">Imposta un obiettivo</a>
+    {% endif %}
+  </section>
+
+{% else %}
+
+  <section class="plan-head">
+    <div>
+      <p class="plan-eyebrow">Piano attivo</p>
+      <h2>{{ plan.plan_json.title }}</h2>
+      <p class="plan-week">Settimana {{ current_week }} di {{ plan.weeks_total }}</p>
+    </div>
+    <div class="plan-progress">
+      <div class="plan-bar"><span style="width: {{ progress }}%"></span></div>
+      <span class="plan-pct">{{ progress }}%</span>
+    </div>
+  </section>
+
+  {% if plan.plan_json.rationale %}
+    <p class="plan-rationale">{{ plan.plan_json.rationale }}</p>
+  {% endif %}
+
+  {% if today_session %}
+  <section class="today-card {{ 'adapted' if today_session.adapted else '' }}">
+    <p class="today-eyebrow">Oggi</p>
+    <p class="today-type">{{ today_session.icon }} {{ today_session.detail or today_session.type }}</p>
+    {% if today_session.note %}<p class="today-note">{{ today_session.note }}</p>{% endif %}
+    {% if today_session.adapted %}
+      <p class="today-adaptation">{{ today_session.adaptation_reason }}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if week %}
+  <h2 class="section-title">Settimana {{ week.number }}{% if week.focus %} · {{ week.focus }}{% endif %}</h2>
+  <div class="week-grid">
+    {% for name in weekdays %}
+      {% set d = (week.days | selectattr('weekday', 'equalto', name) | first) %}
+      <div class="day-card {{ 'today' if name == today_name else '' }}
+                  {{ 'rest' if d and d.type == 'riposo' else '' }}">
+        <p class="day-name">{{ name[:3] }}</p>
+        {% if d %}
+          <p class="day-type">{{ d.type }}</p>
+          <p class="day-detail">{{ d.detail }}</p>
+        {% else %}
+          <p class="day-type">—</p>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <h2 class="section-title">Tutte le settimane</h2>
+  <div class="weeks-list">
+    {% for w in plan.plan_json.weeks %}
+    <details class="week-row {{ 'current' if w.number == current_week else '' }}">
+      <summary>
+        <span class="week-number">Settimana {{ w.number }}</span>
+        <span class="week-focus">{{ w.focus }}</span>
+        {% if w.total_km %}<span class="week-km">{{ w.total_km }} km</span>{% endif %}
+      </summary>
+      <ul class="week-days">
+        {% for d in w.days %}
+          <li>
+            <span class="wd-name">{{ d.weekday }}</span>
+            <span class="wd-type">{{ d.type }}</span>
+            <span class="wd-detail">{{ d.detail }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endfor %}
+  </div>
+
+  <form method="post" action="/plan/archive" class="plan-archive"
+        onsubmit="return confirm('Archiviare il piano? Potrai generarne uno nuovo.')">
+    <button type="submit" class="linkbtn">Archivia questo piano</button>
+  </form>
+
+{% endif %}
+
+{% endblock %}

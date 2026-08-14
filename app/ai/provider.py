@@ -40,7 +40,14 @@ class StubProvider(AIProvider):
     def name(self) -> str:
         return "stub (nessuna AI collegata)"
 
-    def generate_training_plan(self, context: dict[str, Any], goal: str) -> str:
+    def generate_training_plan(
+        self, context: dict[str, Any], goal: str, schema: dict[str, Any] | None = None
+    ) -> str | dict[str, Any]:
+        if schema is not None:
+            # Nessun modello collegato: meglio dirlo che restituire un finto piano.
+            raise AIProviderError(
+                "Provider «stub»: collega un modello AI per generare i piani."
+            )
         payload = {"goal": goal, "data": context}
         pretty = json.dumps(payload, indent=2, ensure_ascii=False, default=str)
         return (
@@ -204,19 +211,34 @@ class ClaudeProvider(AIProvider):
 
     # --------------------------- piani ---------------------------
 
-    def generate_training_plan(self, context: dict[str, Any], goal: str) -> str:
+    def generate_training_plan(
+        self, context: dict[str, Any], goal: str, schema: dict[str, Any] | None = None
+    ) -> str | dict[str, Any]:
         from app.ai.prompts import plan_system_prompt, plan_user_prompt
 
+        request: dict[str, Any] = {
+            "model": self.heavy,
+            "max_tokens": _PLAN_MAX_TOKENS,
+            "system": plan_system_prompt(structured=schema is not None),
+            "messages": [{"role": "user", "content": plan_user_prompt(context, goal)}],
+        }
+        if schema is not None:
+            request["output_config"] = {
+                "format": {"type": "json_schema", "schema": schema}
+            }
+
         try:
-            response = self.client.messages.create(
-                model=self.heavy,
-                max_tokens=_PLAN_MAX_TOKENS,
-                system=plan_system_prompt(),
-                messages=[{"role": "user", "content": plan_user_prompt(context, goal)}],
-            )
+            response = self.client.messages.create(**request)
         except Exception as exc:  # noqa: BLE001
             raise AIProviderError(f"Generazione piano fallita: {exc}") from exc
-        return self._text_of(response)
+
+        text = self._text_of(response)
+        if schema is None:
+            return text
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise AIProviderError("Il piano ricevuto non e' JSON valido.") from exc
 
 
 # ============================================================================
@@ -351,21 +373,37 @@ class OpenAIProvider(AIProvider):
         )
         yield Finished(tokens_in, tokens_out, self.model, tools_used)
 
-    def generate_training_plan(self, context: dict[str, Any], goal: str) -> str:
+    def generate_training_plan(
+        self, context: dict[str, Any], goal: str, schema: dict[str, Any] | None = None
+    ) -> str | dict[str, Any]:
         from app.ai.prompts import plan_system_prompt, plan_user_prompt
 
+        request: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": _PLAN_MAX_TOKENS,
+            "messages": [
+                {"role": "system", "content": plan_system_prompt(structured=schema is not None)},
+                {"role": "user", "content": plan_user_prompt(context, goal)},
+            ],
+        }
+        if schema is not None:
+            request["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "training_plan", "strict": True, "schema": schema},
+            }
+
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=_PLAN_MAX_TOKENS,
-                messages=[
-                    {"role": "system", "content": plan_system_prompt()},
-                    {"role": "user", "content": plan_user_prompt(context, goal)},
-                ],
-            )
+            response = self.client.chat.completions.create(**request)
         except Exception as exc:  # noqa: BLE001
             raise AIProviderError(f"Generazione piano fallita: {exc}") from exc
-        return (response.choices[0].message.content or "").strip()
+
+        text = (response.choices[0].message.content or "").strip()
+        if schema is None:
+            return text
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise AIProviderError("Il piano ricevuto non e' JSON valido.") from exc
 
 
 # ============================================================================
