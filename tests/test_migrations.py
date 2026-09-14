@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 EXPECTED_TABLES = {
     "users",
+    "provider_connections",
     "invite_codes",
     "push_subscriptions",
     "activities",
@@ -31,6 +32,7 @@ EXPECTED_TABLES = {
     "chat_messages",
     "ai_usage_log",
     "notification_log",
+    "daily_checkins",
 }
 
 

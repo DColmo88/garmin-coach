@@ -81,7 +81,7 @@ def activities(count: int = 12, days_span: int = 28, km: float = 8,
     rows = []
     for i in range(count):
         rows.append(SimpleNamespace(
-            garmin_activity_id=i,
+            external_id=i,
             activity_type="running",
             start_time=datetime(2026, 8, 1) + timedelta(days=i * days_span // max(count, 1)),
             distance_m=km * 1000,
@@ -202,7 +202,7 @@ def test_health_falling_hr_is_adaptation():
 
 def test_health_poor_recharge_alone():
     reading = domains.read_health(wellness_rows(battery=50))
-    assert "recupero notturno non chiude" in reading.verdict.lower()
+    assert "non ti ricarichi" in reading.verdict.lower()
 
 
 def test_health_stable_is_reported_as_such():
@@ -218,47 +218,100 @@ def test_health_flags_high_stress_and_low_steps():
 
 
 # ============================================================================
-# Performance
+# Forma e carico
 # ============================================================================
 
-def test_performance_without_data():
-    assert "abbastanza dati" in domains.read_performance([]).verdict
+def fake_load(acwr=1.0, tsb=0.0, ctl=45.0, monotony=1.2,
+              has_data=True, reliable=True):
+    """Un `LoadSummary` finto: qui si testa la lettura, non il calcolo.
 
+    Il calcolo ha i suoi test in `test_analysis_load.py`.
+    """
+    from app.analysis.load import acwr_label, form_label
 
-def test_performance_overload_without_gain_is_the_worst_case():
-    reading = domains.read_performance(training_rows(load=200, load_recent=400))
-    assert reading.tone == "bad"
-    assert "Riduci il volume" in reading.action
-
-
-def test_performance_growth_under_overload_says_consolidate():
-    reading = domains.read_performance(
-        training_rows(vo2=50, vo2_recent=52, load=200, load_recent=400)
+    return SimpleNamespace(
+        has_data=has_data, acwr=acwr, tsb=tsb, ctl=ctl, atl=ctl - tsb,
+        monotony=monotony, is_reliable=reliable,
+        form_reading=form_label(tsb), acwr_reading=acwr_label(acwr),
     )
-    assert "non regge a lungo" in reading.verdict
-    assert "Consolida" in reading.action
 
 
-def test_performance_improving_with_sustainable_load():
-    reading = domains.read_performance(training_rows(vo2=50, vo2_recent=51.5))
+def test_fitness_without_data():
+    assert "abbastanza dati" in domains.read_fitness([]).verdict
+
+
+def test_fitness_reads_without_a_load_summary():
+    """La pagina deve reggere anche prima che ci siano attività da cui calcolare."""
+    reading = domains.read_fitness(training_rows(vo2=50, vo2_recent=51.5))
+    assert reading.has_content
+    assert reading.verdict == "La fitness sta salendo."
+
+
+def test_overload_on_top_of_a_hole_is_the_worst_case():
+    reading = domains.read_fitness(training_rows(), fake_load(acwr=1.8, tsb=-40))
+    assert reading.tone == "bad"
+    assert "continuando a caricare" in reading.verdict
+    assert "taglia il volume" in reading.action
+
+
+def test_overload_alone_says_consolidate():
+    reading = domains.read_fitness(training_rows(), fake_load(acwr=1.6, tsb=-5))
+    assert "più in fretta" in reading.verdict
+    assert reading.tone == "warn"
+
+
+def test_being_buried_without_overload_asks_for_easy_days():
+    reading = domains.read_fitness(training_rows(), fake_load(acwr=1.0, tsb=-45))
+    assert "fatica ha superato" in reading.verdict
+    assert "due giorni facili" in reading.action
+
+
+def test_peak_form_is_called_an_opportunity():
+    reading = domains.read_fitness(training_rows(), fake_load(acwr=0.7, tsb=32))
+    assert reading.tone == "good"
+    assert "fresco" in reading.verdict
+    assert "gara" in reading.action
+
+
+def test_fitness_improving_with_sustainable_load():
+    reading = domains.read_fitness(
+        training_rows(vo2=50, vo2_recent=51.5), fake_load()
+    )
     assert reading.verdict == "La fitness sta salendo."
     assert reading.tone == "good"
 
 
-def test_performance_declining():
-    reading = domains.read_performance(training_rows(vo2=52, vo2_recent=50))
+def test_fitness_declining():
+    reading = domains.read_fitness(training_rows(vo2=52, vo2_recent=50), fake_load())
     assert "calando" in reading.verdict
 
 
-def test_performance_flags_unbalanced_hrv():
-    reading = domains.read_performance(training_rows(hrv_status="unbalanced"))
+def test_fitness_flags_unbalanced_hrv():
+    reading = domains.read_fitness(training_rows(hrv_status="unbalanced"), fake_load())
     hrv_notes = [n for n in reading.notes if "HRV" in n.text]
     assert hrv_notes and hrv_notes[0].tone == "warn"
 
 
-def test_performance_load_ratio_note_appears():
-    reading = domains.read_performance(training_rows())
-    assert any("carico" in n.text.lower() for n in reading.notes)
+def test_the_load_ratio_becomes_a_note():
+    reading = domains.read_fitness(training_rows(), fake_load(acwr=1.6))
+    load_notes = [n for n in reading.notes if n.metric == "load"]
+    assert load_notes and load_notes[0].tone == "bad"
+
+
+def test_a_monotonous_week_becomes_a_note():
+    reading = domains.read_fitness(training_rows(), fake_load(monotony=2.5))
+    assert any("Monotonia" in n.text for n in reading.notes)
+
+
+def test_estimated_load_is_declared_in_the_notes():
+    """Se metà dei carichi è stimata, la pagina lo dice invece di far finta."""
+    reading = domains.read_fitness(training_rows(), fake_load(reliable=False))
+    assert any("stimato" in n.text for n in reading.notes)
+
+
+def test_a_load_summary_without_data_is_ignored_not_crashed_on():
+    reading = domains.read_fitness(training_rows(), fake_load(has_data=False))
+    assert reading.has_content
 
 
 # ============================================================================
@@ -363,7 +416,7 @@ def test_activities_report_volume_and_longest():
 @pytest.mark.parametrize("reader,rows", [
     (domains.read_sleep, sleep_rows()),
     (domains.read_health, wellness_rows()),
-    (domains.read_performance, training_rows()),
+    (domains.read_fitness, training_rows()),
     (domains.read_body, body_rows()),
 ])
 def test_every_reading_is_complete(reader, rows):
@@ -376,7 +429,7 @@ def test_every_reading_is_complete(reader, rows):
 @pytest.mark.parametrize("reader,rows", [
     (domains.read_sleep, sleep_rows()),
     (domains.read_health, wellness_rows()),
-    (domains.read_performance, training_rows()),
+    (domains.read_fitness, training_rows()),
     (domains.read_body, body_rows()),
 ])
 def test_readings_survive_holes_in_the_data(reader, rows):
@@ -393,7 +446,7 @@ def test_note_tones_are_valid():
     for reader, rows in (
         (domains.read_sleep, sleep_rows(deep_frac=0.10)),
         (domains.read_health, wellness_rows(rhr=50, rhr_recent=58, battery=50)),
-        (domains.read_performance, training_rows(load=200, load_recent=400)),
+        (domains.read_fitness, training_rows()),
         (domains.read_body, body_rows(per_day_kg=-0.15)),
         (domains.read_activities, activities()),
     ):
@@ -410,7 +463,7 @@ def test_no_data_messages_are_grammatical():
     for reader, empty in (
         (domains.read_sleep, []),
         (domains.read_health, []),
-        (domains.read_performance, []),
+        (domains.read_fitness, []),
         (domains.read_activities, []),
     ):
         verdict = reader(empty).verdict
@@ -426,8 +479,8 @@ def test_acronyms_keep_their_capitalisation():
     health = domains.read_health(wellness_rows())
     assert "FC a riposo" in health.evidence and "Fc a riposo" not in health.evidence
 
-    performance = domains.read_performance(training_rows())
-    assert "VO₂max" in performance.evidence and "Vo₂max" not in performance.evidence
+    fitness = domains.read_fitness(training_rows())
+    assert "VO₂max" in fitness.evidence and "Vo₂max" not in fitness.evidence
 
 
 def test_low_volume_wins_over_intensity_distribution():
@@ -443,3 +496,47 @@ def test_intensity_distribution_matters_once_volume_is_there():
         activities(count=12, days_span=28, avg_hr=140, max_hr=180)
     )
     assert "stessa intensità media" in reading.verdict
+
+
+# ============================================================================
+# Costanti di Garmin tradotte
+# ============================================================================
+
+@pytest.mark.parametrize("raw,expected", [
+    ("UNPRODUCTIVE_1", "allenamento improduttivo"),
+    ("PRODUCTIVE_2", "allenamento produttivo"),
+    ("MAINTAINING", "stai mantenendo"),
+    ("peaking", "sei al picco"),
+])
+def test_training_status_becomes_italian(raw, expected):
+    assert domains.training_status_label(raw) == expected
+
+
+def test_an_unknown_status_is_at_least_readable():
+    """Garmin ne inventa di nuovi: meglio ripulirlo che mostrarlo com'è."""
+    assert domains.training_status_label("SOMETHING_NEW_3") == "something new"
+
+
+def test_a_missing_status_stays_missing():
+    assert domains.training_status_label(None) is None
+    assert domains.training_status_label("") is None
+
+
+def test_the_raw_constant_never_reaches_the_prose():
+    reading = domains.read_fitness(training_rows(status="UNPRODUCTIVE_1"))
+    assert "UNPRODUCTIVE_1" not in reading.evidence
+    assert "improduttivo" in reading.evidence
+
+
+def test_hrv_status_becomes_italian():
+    assert domains.hrv_status_label("BALANCED") == "in equilibrio"
+    assert domains.hrv_status_label("UNBALANCED") == "sbilanciato"
+    assert domains.hrv_status_label(None) is None
+
+
+def test_the_raw_hrv_constant_never_reaches_the_notes():
+    reading = domains.read_fitness(training_rows(hrv_status="BALANCED"))
+    hrv_notes = [n for n in reading.notes if n.metric == "hrv"]
+    assert hrv_notes
+    assert "BALANCED" not in hrv_notes[0].text
+    assert "in equilibrio" in hrv_notes[0].text

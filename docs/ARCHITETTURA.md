@@ -5,7 +5,7 @@ Per il *perché* delle scelte vedi la spec `superpowers/specs/2026-08-14-garmin-
 Per il *cosa si vede a schermo* vedi `../PRD_GarminCoach.md`.
 
 > **Stato al 14 agosto 2026: completo e in produzione.**
-> 440 test verdi · https://garmin.46.224.17.241.sslip.io
+> 562 test verdi · https://garmin.46.224.17.241.sslip.io
 
 ---
 
@@ -22,12 +22,12 @@ Per il *cosa si vede a schermo* vedi `../PRD_GarminCoach.md`.
 │  PRESENTAZIONE      routers/       templates/       static/              │
 │      pages · auth · chat · api          Jinja2            CSS · JS       │
 │  ───────────────────────────────────────────────────────────────────────│
-│  DOMINIO            auth/      ai/       gamification/    notifications/ │
-│                   sessioni  readiness      XP/badge         dispatcher   │
-│                   crypto    insights                        3 canali     │
-│                   login     chat+tools                                   │
-│                             coaching                                     │
-│                             training_plan                                │
+│  DOMINIO         auth/     analysis/     ai/      gamification/  notif/ │
+│                sessioni    profilo    readiness     XP/badge   dispatch │
+│                crypto      TRIMP      insights                 3 canali │
+│                login       PMC        chat+tools                        │
+│                            zone       coaching                          │
+│                            record     training_plan                     │
 │  ───────────────────────────────────────────────────────────────────────│
 │  DATI               db/models · db/database · queries · garmin/sync      │
 │  INTEGRAZIONI       garmin/client · garmin/service · ai/provider         │
@@ -55,10 +55,12 @@ Non contiene logica di dominio — solo orchestrazione e formattazione.
 | `/coach` | Landing: readiness, allenamento suggerito, insight, progresso |
 | `/` | Panoramica: KPI + grafici + attività recenti |
 | `/activities`, `/activities/{id}` | Storico e dettaglio allenamenti |
-| `/sleep`, `/health`, `/performance`, `/body` | Dashboard tematiche |
+| `/fitness` | Forma e carico: CTL/ATL/TSB, ACWR, zone, primati, VO₂max |
+| `/sleep`, `/health`, `/body` | Dashboard tematiche |
 | `/goals` | Il "laboratorio": obiettivo attivo e parametri |
 | `/plan` | Piano di allenamento generato |
-| `/settings` | Preferenze notifiche, account |
+| `/settings` | Soglie fisiologiche, preferenze notifiche, account |
+| `/devices` | Dispositivi, gear, badge (letti live) |
 | `/admin` | Utenti, inviti, consumo AI (solo `is_admin`) |
 
 ### 1.2 `app/routers/auth.py`
@@ -70,12 +72,25 @@ Traduce le eccezioni di `auth/service.py` in messaggi d'errore leggibili nel for
 Delega tutto ad `ai/chat.py`; il router gestisce solo il protocollo di streaming e la quota.
 
 ### 1.4 `app/templates/`
-`base.html` (sidebar, topbar, stato sync) + una pagina per sezione + `_components.html` (macro riusabili: KPI card, insight card, ring SVG, session card).
+`base.html` + una pagina per sezione + `_components.html` (macro riusabili: ring SVG, lettura di pagina, note per grafico) + `_icons.html` (il set di icone SVG).
 `login.html` è standalone (niente sidebar).
 
+**La navigazione è raggruppata.** Quattordici voci in fila non sono un menu, sono
+un elenco: la barra laterale le divide in *Oggi*, *Allenamento*, *Salute*, e le
+voci di account, dispositivi e amministrazione stanno nel menu del profilo in
+alto a destra — cose che si fanno una volta, non ogni giorno. Su telefono le
+quattro voci principali stanno nella barra in basso, il resto nel foglio «Altro»,
+con gli stessi gruppi.
+
 ### 1.5 `app/static/`
-`style.css`: design system dark (token colore/spaziatura/tipografia, componenti).
-`app.js`: helper Chart.js condivisi, toast di sync, client SSE della chat.
+`style.css`: **un solo** sistema di token (prima ce n'erano due, in due `:root`
+diversi, con `.pill` definito due volte e tre accenti in circolazione). Un accento
+solo, superfici che si distinguono per tono invece che per bordi, ombre tinte del
+fondo, e **cifre monospaziate a larghezza fissa** per ogni numero: in un'app di
+dati una colonna che balla è un difetto di lettura.
+`app.js`: helper Chart.js condivisi (compreso il Performance Management Chart),
+toast di sync, menu account, client SSE della chat. La palette dei grafici la
+legge dalle variabili CSS, così non va mai fuori tono.
 `manifest.json` + `sw.js` per la PWA (installabilità + ricezione push).
 
 ### 1.6 `app/templating.py`
@@ -97,8 +112,8 @@ Istanza Jinja2 condivisa + filtri di formattazione (durate, distanze, date, valo
 ### 2.2 `app/ai/` — intelligenza
 | File | Tipo | Responsabilità |
 |---|---|---|
-| `readiness.py` | deterministico | Score 0-100 da sonno/HRV/battery/carico/FC riposo, con breakdown per fattore e banda (Pronto→Riposo) |
-| `insights.py` | deterministico | ~8 regole su trend (FC riposo, carico, sonno, VO₂max, streak…) → `Insight(icona, titolo, testo, colore)`, ordinati per priorità |
+| `readiness.py` | deterministico | Score 0-100 da sonno/HRV/battery/carico/FC riposo. **Un fattore senza dato resta vuoto**: i pesi si ridistribuiscono sui presenti invece di sostituire un valore neutro |
+| `insights.py` | deterministico | ~12 regole su trend (FC riposo, carico, forma, zona grigia, monotonia, sonno, VO₂max, serie…) → `Insight(titolo, testo, colore)`, ordinati per priorità |
 | `context.py` | deterministico | Costruisce il payload dati strutturato per i prompt |
 | `base.py` | interfaccia | `AIProvider` astratto |
 | `provider.py` | integrazione | `ClaudeProvider` + `OpenAIProvider` + `StubProvider`, scelti da `AI_PROVIDER`; modello "light" (chat/coaching) e "heavy" (piani) |
@@ -118,7 +133,34 @@ Calcola XP, serie e traguardi dai dati già nel DB, dopo ogni sync. Nessuno stat
 da mantenere coerente: se arrivano dati in ritardo, i conteggi si sistemano da soli.
 Nessun input utente, nessuna AI.
 
-### 2.4 `app/insights/` — l'interpretazione delle dashboard
+### 2.4 `app/analysis/` — il carico di allenamento, calcolato
+
+Garmin, per molti account, non popola mai `training_load`: 28 giorni di
+metriche, zero valori. Metà del linguaggio dell'app — «carico acuto», «rischio
+di sovrallenamento», il 15% del punteggio di prontezza — poggiava su un campo
+vuoto e restituiva sempre lo stesso valore neutro.
+
+Questo package ricalcola quel carico dai dati che Garmin *dà davvero*: durata,
+frequenza cardiaca, potenza.
+
+| File | Responsabilità |
+|---|---|
+| `profile.py` | Le soglie dell'atleta (FC max, FC riposo, soglia, FTP): dichiarate in `/settings`, altrimenti **osservate** dai dati o **stimate**. Ogni valore porta la propria provenienza, così l'interfaccia può dire quando un numero è misurato |
+| `load.py` | TRIMP di Banister · TSS da potenza · curve CTL/ATL/TSB del Performance Management Chart · rapporto acuto/cronico · monotonia e strain di Foster |
+| `zones.py` | Distribuzione del tempo nelle cinque zone FC, dai secondi che Garmin calcola per ogni attività. Legge la regola 80/20 e riconosce la «zona grigia» |
+| `records.py` | Primati calcolati dallo storico: tempi sulle distanze classiche, ritmo migliore, uscita più lunga, settimana con più km |
+| `summary.py` | `LoadSummary`: mette tutto insieme, così pagine, prontezza, notifiche e tool AI leggono **gli stessi numeri** |
+
+Due soglie di onestà, entrambe emerse dai dati reali:
+
+- il **rapporto acuto/cronico** non si calcola sotto gli otto giorni di
+  allenamento in quattro settimane: chi esce una volta ogni tre settimane
+  otterrebbe 3,0 e un allarme sovrallenamento per una singola uscita, perché il
+  denominatore è quasi zero;
+- il **carico stimato dalla sola durata** (attività senza FC) viene marcato
+  come tale, e la pagina lo dichiara.
+
+### 2.5 `app/insights/` — l'interpretazione delle dashboard
 | File | Responsabilità |
 |---|---|
 | `stats.py` | Statistica tollerante ai buchi: medie, pendenze, dispersione. Restituisce `None` invece di inventare un trend su due punti |
@@ -126,11 +168,16 @@ Nessun input utente, nessuna AI.
 
 È il livello che risponde alla richiesta "non voglio dati crudi buttati lì".
 Incrocia più segnali invece di guardarne uno solo: quantità × qualità × regolarità
-per il sonno, FC a riposo × ricarica notturna per la salute, crescita del VO₂max
-contro il rapporto di carico per la performance, e la distribuzione delle intensità
-per gli allenamenti.
+per il sonno, FC a riposo × ricarica notturna per la salute, forma × rapporto di
+carico × VO₂max per `read_fitness`, e la distribuzione delle intensità per gli
+allenamenti — sui minuti effettivi per zona, quando ci sono, invece che sulla FC
+media dell'intera uscita.
 
-### 2.5 `app/notifications/`
+Qui vivono anche le traduzioni delle costanti Garmin: `UNPRODUCTIVE_1` diventa
+«allenamento improduttivo», `BALANCED` diventa «in equilibrio». Prima finivano
+nelle frasi così com'erano.
+
+### 2.6 `app/notifications/`
 | File | Responsabilità |
 |---|---|
 | `rules.py` | Regole deterministiche che decidono *se* notificare (readiness critico, overtraining, sessione chiave, gara vicina, sync fallita, riepilogo settimanale) + dedup |
@@ -147,7 +194,10 @@ L'utente sceglie in `/settings` quale tipo di evento su quale canale. Default co
 **Tabelle time-series** (una riga per giorno/attività, tutte con `user_id`): `activities`, `sleep_records`, `training_metrics`, `daily_wellness`, `body_composition`.
 Unicità composita `(user_id, day)` — così due utenti possono avere lo stesso giorno, e la ri-sincronizzazione fa upsert invece di duplicare.
 
-**Tabelle applicative** (v2): `users`, `invite_codes`, `user_goals`, `training_plans`, `daily_coach_cache`, `gamification_state`, `chat_conversations`, `chat_messages`, `ai_usage_log`.
+**Tabelle applicative** (v2): `users`, `invite_codes`, `user_goals`, `training_plans`, `daily_coach_cache`, `gamification_state`, `chat_conversations`, `chat_messages`, `ai_usage_log`, `notification_log`, `push_subscriptions`.
+
+`users` porta anche il **profilo fisiologico** (`hr_max`, `hr_rest`, `lthr`, `ftp`, `sex`, `birth_year`), tutto facoltativo.
+`activities.hr_zones_json` contiene i secondi per zona FC, scaricati da un endpoint separato (uno per attività, con un tetto per sync).
 
 ### 3.2 `app/db/database.py` e `migrations/`
 Engine URL-driven: SQLite in dev, Postgres in prod, stesso codice. Alembic gestisce l'evoluzione dello schema (`init_db()` resta solo per test e dev).
@@ -163,7 +213,9 @@ Unico posto dove si legge il DB per la UI. Ogni funzione prende `user_id` e rest
 Registry di client Garmin **per-utente**: token cachato su disco in `data/garmin_tokens/{user_id}/`, lock per evitare login concorrenti, `validate_credentials()` usata in fase di registrazione.
 
 ### 4.2 `app/garmin/sync.py`
-Scarica e salva le time-series (attività, sonno, training, wellness, corpo). Parsing **difensivo**: ogni campo mancante diventa `None`, un endpoint che fallisce non interrompe la sync degli altri.
+Scarica e salva le time-series (attività, zone FC, sonno, training, wellness, corpo). Parsing **difensivo**: ogni campo mancante diventa `None`, un endpoint che fallisce non interrompe la sync degli altri.
+
+`sync_activity_zones()` è l'unico passo che costa una chiamata per attività: scarica solo quelle che non hanno ancora il dato, al massimo 25 per volta.
 
 ### 4.3 `app/garmin/service.py`
 Letture "snapshot" live non storicizzate (dispositivi, gear, record personali, race predictor, dettaglio attività) con cache in memoria TTL 5 min, keyed per utente.

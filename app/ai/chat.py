@@ -105,13 +105,27 @@ def _title_from(text: str) -> str:
 
 
 def build_system_prompt(db: Session, user: User) -> str:
-    """Sintesi compatta dello stato dell'atleta: poche centinaia di token."""
+    """Il quadro delle ultime due settimane, non solo lo stato di oggi.
+
+    Costa qualche centinaio di token in più del vecchio snapshot puntuale. È il
+    posto giusto dove spenderli: senza le serie, il modello reagisce a una
+    notte storta come se fosse una crisi.
+    """
+    from app.ai import briefing as briefing_builder
+
     snap = q.coach_snapshot(db, user.id)
     readiness = compute_readiness(snap)
     goal = active_goal(db, user.id)
-    name = (user.display_name or user.garmin_email.split("@")[0]).strip()
+    name = (user.display_name or user.email.split("@")[0]).strip()
+    from app import providers
+
     return chat_system_prompt(
-        name, snap, readiness, goal, datetime.now().strftime("%d/%m/%Y")
+        name,
+        briefing_builder.build(db, user),
+        readiness,
+        goal,
+        datetime.now().strftime("%d/%m/%Y"),
+        has_recovery_data=providers.has(user, providers.Capability.SLEEP),
     )
 
 

@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ai.readiness import ReadinessResult
+from app.clock import today_for
 from app.db.models import NotificationLog, User, UserGoal
 from app.goals import days_to_target
 
@@ -61,7 +62,7 @@ EVENT_TYPES: tuple[EventType, ...] = (
     ),
     EventType(
         "sync_failed", "Sincronizzazione non riuscita",
-        "Quando l'app non riesce più a scaricare i dati da Garmin.",
+        "Quando l'app non riesce più a scaricare i dati dalla tua sorgente.",
         cooldown_days=2, default_on=True,
     ),
     EventType(
@@ -262,7 +263,7 @@ def weekly_summary(
     db: Session, user: User, snap: dict, today: date | None = None
 ) -> Notification | None:
     """Riepilogo della domenica sera, se l'utente lo ha chiesto."""
-    today = today or date.today()
+    today = today or today_for(user)
     if today.weekday() != 6:  # 6 = domenica
         return None
     if not is_enabled(user, "weekly_summary"):

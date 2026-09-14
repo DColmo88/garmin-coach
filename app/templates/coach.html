@@ -4,21 +4,147 @@
 {% block heading %}Coach{% endblock %}
 {% block content %}
 
+<div class="date-navigator" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 24px; padding: 12px; background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border-color);">
+  <a href="/coach?day={{ prev_day }}" style="text-decoration:none; padding:4px 8px;">&larr; Precedente</a>
+  <span style="font-weight: 500;">
+    {% if is_today %}Oggi{% else %}{{ target_date.strftime('%d/%m/%Y') }}{% endif %}
+  </span>
+  {% if not is_today %}
+    <a href="/coach?day={{ next_day }}" style="text-decoration:none; padding:4px 8px;">Successivo &rarr;</a>
+  {% else %}
+    <span style="opacity:0.3; padding:4px 8px; cursor:not-allowed;">Successivo &rarr;</span>
+  {% endif %}
+</div>
+
+{% if not snap.has_target_data %}
+<section class="card" style="margin-bottom: 24px; background: rgba(255,193,7,0.1); border: 1px solid rgba(255,193,7,0.3); padding: 16px;">
+  <p style="margin:0; font-weight: 500;">Dati in sospeso o non disponibili</p>
+  <p style="margin:4px 0 0; font-size: 0.9em;">Per questa data non risultano misurazioni quotidiane (sonno, stress, passi). I widget sottostanti potrebbero risultare incompleti.</p>
+</section>
+{% endif %}
+
+{# Il check-in sta in cima, prima della prontezza, perché la cambia: chiederlo
+   dopo aver mostrato il punteggio vorrebbe dire mostrarne uno che sta per
+   diventare un altro. Compare solo per oggi: non si compila il passato. #}
+{% if is_today %}
+<section class="card checkin{% if checkin %} done{% endif %}">
+  {% if checkin %}
+    <div class="checkin-done">
+      <p class="checkin-title">Come stai oggi</p>
+      <p class="checkin-values">
+        {% if checkin.energy %}Energia {{ checkin.energy }}/5{% endif %}
+        {% if checkin.legs %} · Gambe {{ checkin.legs }}/5{% endif %}
+        {% if checkin.mood %} · Testa {{ checkin.mood }}/5{% endif %}
+        {% if checkin.sleep_quality %} · Sonno {{ checkin.sleep_quality }}/5{% endif %}
+      </p>
+      <button type="button" class="btn small" data-toggle-checkin>Correggi</button>
+    </div>
+  {% else %}
+    <p class="checkin-title">Come stai oggi?</p>
+    <p class="checkin-hint">
+      Quindici secondi. Nessun sensore sa che hai dormito in treno o che hai le
+      gambe piene da ieri — e su come andrà oggi questo conta più dell'HRV.
+    </p>
+  {% endif %}
+
+  <form method="post" action="/checkin" class="checkin-form"
+        {% if checkin %}hidden data-checkin-form{% endif %}>
+    {% for field, label, low, high in [
+         ("energy", "Energia", "a terra", "carico"),
+         ("legs", "Gambe", "pesanti", "leggere"),
+         ("mood", "Testa", "svogliato", "motivato"),
+         ("sleep_quality", "Sonno", "pessimo", "ottimo")] %}
+      <div class="checkin-row">
+        <span class="checkin-label">{{ label }}</span>
+        <div class="checkin-scale">
+          {% for n in range(1, 6) %}
+            <label class="checkin-dot">
+              <input type="radio" name="{{ field }}" value="{{ n }}"
+                     {% if checkin and checkin[field] == n %}checked{% endif %} />
+              <span>{{ n }}</span>
+            </label>
+          {% endfor %}
+        </div>
+        <span class="checkin-ends">{{ low }} → {{ high }}</span>
+      </div>
+    {% endfor %}
+    <input type="text" name="note" class="checkin-note" maxlength="500"
+           placeholder="Qualcosa che i numeri non dicono (facoltativo)"
+           value="{{ checkin.note or '' if checkin else '' }}" />
+    <button type="submit" class="btn primary">Salva</button>
+  </form>
+</section>
+{% endif %}
+
+{% if has_readiness %}
 <section class="coach-hero">
   {{ ring(readiness.score, 100, "Readiness", readiness.label, 160) }}
   <div class="hero-text">
-    <p class="hero-status">{{ readiness.emoji }} {{ readiness.label }}</p>
+    <p class="hero-status">{{ readiness.label }}</p>
     <p class="hero-msg">{{ coaching.message }}</p>
+    {#
+      I fattori senza dato restano vuoti e spenti: mostrarli con un valore
+      neutro li farebbe sembrare misure, e non lo sono.
+    #}
     <div class="pill-row">
       {% for f in readiness.breakdown %}
-        <span class="pill {{ f.color }}">
+        <span class="pill {{ f.color }}" {{ 'title=Dato non disponibile' if not f.is_measured }}>
           <span class="p-name">{{ f.name }}</span>
-          <span class="p-val">{{ f.value }}</span>
+          <span class="p-val">{{ f.display }}</span>
         </span>
       {% endfor %}
     </div>
+    {% if readiness.missing_factors %}
+    <p class="hint">
+      Il punteggio è calcolato sui fattori disponibili.
+      {{ readiness.missing_factors | map(attribute='name') | join(', ') }}
+      {{ 'non è' if readiness.missing_factors | length == 1 else 'non sono' }}
+      fra questi.
+    </p>
+    {% endif %}
   </div>
 </section>
+{% else %}
+{#
+  Senza sonno e HRV la prontezza non è calcolabile — e non è un ripiego, è la
+  regola di fondatezza scritta in `app/ai/readiness.py`. Invece di un buco dove
+  stava il numero più grande, il titolo diventa la forma.
+
+  Non si riusa il cerchio della prontezza: quello va da 0 a 100 e più alto è
+  meglio è, mentre il TSB sta fra −30 e +25 e negativo non vuol dire «male»,
+  vuol dire «carico». Forzarcelo dentro darebbe un anello sempre vuoto e un
+  numero che non somiglia a niente. Si usa la stessa lettura di /fitness.
+#}
+{% if load.has_data %}
+<section class="pmc-hero">
+  <div class="pmc-figure">
+    <span class="pmc-label">Fitness</span>
+    <span class="pmc-value">{{ load.ctl | round | int }}</span>
+    <span class="pmc-note">quanto lavoro il corpo ha assorbito</span>
+  </div>
+  <div class="pmc-figure">
+    <span class="pmc-label">Fatica</span>
+    <span class="pmc-value">{{ load.atl | round | int }}</span>
+    <span class="pmc-note">quanto deve ancora smaltire</span>
+  </div>
+  <div class="pmc-figure is-primary tone-{{ load.form_reading[1] }}">
+    <span class="pmc-label">Forma</span>
+    <span class="pmc-value">{{ '%+d' % (load.tsb | round | int) }}</span>
+    <span class="pmc-note">{{ load.form_reading[0] }}</span>
+  </div>
+</section>
+{% endif %}
+
+<section class="card mt">
+  <p class="hero-status">La tua forma</p>
+  <p class="hero-msg">{{ coaching.message }}</p>
+  <p class="hint">
+    Il tuo orologio non misura sonno e recupero, quindi qui trovi l'allenamento
+    invece della prontezza. <a href="/fitness">Vedi la forma</a> per il quadro
+    completo.
+  </p>
+</section>
+{% endif %}
 
 {% if goal %}
 <a href="/goals" class="coach-goal">
@@ -40,12 +166,20 @@
 </a>
 {% endif %}
 
+{#
+  Gli indicatori del benessere. Per chi non li misura non compaiono spenti:
+  «0/5 in range» sembrerebbe un risultato pessimo invece che un'assenza, e
+  «Stress —» è una scheda che occupa spazio per non dire niente.
+#}
+{% if mini %}
 <div class="ring-mini-row">
   {% for m in mini %}
     {{ ring(m.value, m.vmax | default(100), m.label, "", 96) }}
   {% endfor %}
 </div>
+{% endif %}
 
+{% if has_readiness %}
 <div class="card-grid" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px">
   <div class="monitor-card" style="flex:1;min-width:180px">
     <div class="mc-label">Health Monitor</div>
@@ -58,12 +192,41 @@
     </div>
   </div>
 </div>
+{% endif %}
+
+{% if awaiting_effort %}
+<section class="card effort-ask">
+  <p class="checkin-title">Com'è andata?</p>
+  <p class="checkin-hint">
+    Lo sforzo percepito è la misura del carico più semplice che esista, e per le
+    sedute senza fascia cardiaca è l'unica. Si chiede adesso perché fra tre
+    giorni ci si ricorda della distanza, non della fatica.
+  </p>
+  {% for a in awaiting_effort %}
+    <form method="post" action="/activities/{{ a.external_id }}/effort" class="effort-row">
+      <span class="effort-what">
+        {{ a.start_time.strftime('%d/%m') if a.start_time else '' }} ·
+        {{ a | sport_label }}{% if a.distance_m %} · {{ a.distance_m | km }}{% endif %}
+      </span>
+      <span class="effort-scale">
+        {% for n in range(1, 11) %}
+          <button type="submit" name="rpe" value="{{ n }}" class="effort-dot e{{ n }}"
+                  title="{{ n }}/10">{{ n }}</button>
+        {% endfor %}
+      </span>
+    </form>
+  {% endfor %}
+  <p class="checkin-ends">1 = passeggiata · 5 = impegnativo ma comodo · 8 = duro · 10 = massimale</p>
+</section>
+{% endif %}
 
 <h2 style="margin:8px 0 12px">Insight di oggi</h2>
-{% if insights %}
+{% if not snap.has_target_data %}
+  <p class="hero-msg" style="opacity:0.7">Gli insight non sono calcolabili in assenza di dati per questa giornata.</p>
+{% elif insights %}
   {% for i in insights %}
     <div class="insight-card {{ i.color }}">
-      <p class="ic-title">{{ i.icon }} {{ i.title }}</p>
+      <p class="ic-title">{{ i.title }}</p>
       <p class="ic-text">{{ i.text }}</p>
     </div>
   {% endfor %}
@@ -99,6 +262,37 @@
 </section>
 {% endif %}
 
+{#
+  Chi segue un piano ha già una risposta per oggi: è quella del piano, adattata
+  alla prontezza. Affiancarle il consiglio generico dell'AI vorrebbe dire dare
+  due indicazioni diverse per la stessa giornata — e la seconda ignorerebbe il
+  programma che la persona sta seguendo.
+#}
+{% if planned %}
+<h2 style="margin:20px 0 12px">Oggi dal tuo piano</h2>
+<div class="workout-card {{ 'adapted' if planned.adapted else '' }}">
+  <div class="w-head">
+    <span class="w-type">{{ planned.icon }} {{ planned.detail or planned.type }}</span>
+    <span class="w-meta">Settimana {{ planned.week_number }}</span>
+  </div>
+  {% if planned.note %}<p class="w-note">{{ planned.note }}</p>{% endif %}
+  {% if planned.adapted %}
+    {# L'adattamento va detto, non applicato di nascosto: chi segue un piano
+       si accorge che oggi c'è scritto altro e vuole sapere perché. #}
+    <p class="w-adaptation">{{ planned.adaptation_reason }}</p>
+  {% endif %}
+  <a class="w-link" href="/plan">Vedi la settimana →</a>
+</div>
+
+{% elif has_plan %}
+<h2 style="margin:20px 0 12px">Oggi dal tuo piano</h2>
+<div class="workout-card">
+  <p class="w-note">
+    Il piano non prevede niente per oggi. <a href="/plan">Guarda la settimana</a>.
+  </p>
+</div>
+
+{% else %}
 <h2 style="margin:20px 0 12px">Allenamento suggerito</h2>
 <div class="workout-card">
   <div class="w-head">
@@ -107,6 +301,8 @@
   </div>
   <p class="w-meta">{{ coaching.workout.hr_zone }}</p>
   <p class="w-note">"{{ coaching.workout.note }}"</p>
+  <a class="w-link" href="/plan">Vuoi un programma? Creane uno →</a>
 </div>
+{% endif %}
 
 {% endblock %}

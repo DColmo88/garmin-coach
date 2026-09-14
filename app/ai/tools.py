@@ -37,6 +37,20 @@ MONTHLY_THRESHOLD_DAYS = 180
 _DATE_ARG = {"type": "string", "description": "Data ISO (AAAA-MM-GG)"}
 
 
+def _today(db: Session, user_id: int) -> date:
+    """Che giorno è per questo utente.
+
+    Quando il modello chiede «gli ultimi sette giorni», quei sette giorni
+    finiscono ieri o finiscono oggi a seconda del fuso, e l'atleta se ne
+    accorge subito perché manca l'allenamento di stamattina.
+    """
+    from app.clock import today_for
+    from app.db.models import User
+
+    user = db.get(User, user_id)
+    return today_for(user) if user is not None else date.today()
+
+
 # ============================================================================
 # Helper
 # ============================================================================
@@ -51,9 +65,10 @@ def _parse_day(value: Any, default: date) -> date:
         return default
 
 
-def _range(arguments: dict, default_days: int = 7) -> tuple[date, date]:
+def _range(arguments: dict, default_days: int = 7,
+           today: date | None = None) -> tuple[date, date]:
     """Intervallo richiesto, con default sugli ultimi giorni."""
-    end = _parse_day(arguments.get("date_to"), date.today())
+    end = _parse_day(arguments.get("date_to"), today or date.today())
     start = _parse_day(arguments.get("date_from"), end - timedelta(days=default_days - 1))
     if start > end:
         start, end = end, start
@@ -122,7 +137,7 @@ def _period_note(span_days: int) -> str:
 
 def tool_get_wellness(db: Session, user_id: int, arguments: dict) -> str:
     """Passi, FC a riposo, stress, Body Battery in un periodo."""
-    start, end = _range(arguments, 7)
+    start, end = _range(arguments, 7, _today(db, user_id))
     span = (end - start).days + 1
     rows = list(db.scalars(
         select(DailyWellness)
@@ -145,7 +160,7 @@ def tool_get_wellness(db: Session, user_id: int, arguments: dict) -> str:
 
 def tool_get_sleep(db: Session, user_id: int, arguments: dict) -> str:
     """Durata, score e fasi del sonno in un periodo."""
-    start, end = _range(arguments, 7)
+    start, end = _range(arguments, 7, _today(db, user_id))
     span = (end - start).days + 1
     rows = list(db.scalars(
         select(SleepRecord)
@@ -173,7 +188,7 @@ def tool_get_sleep(db: Session, user_id: int, arguments: dict) -> str:
 
 def tool_get_activities(db: Session, user_id: int, arguments: dict) -> str:
     """Elenco degli allenamenti, con filtro per tipo."""
-    start, end = _range(arguments, 30)
+    start, end = _range(arguments, 30, _today(db, user_id))
     query = (
         select(Activity)
         .where(Activity.user_id == user_id,
@@ -194,18 +209,20 @@ def tool_get_activities(db: Session, user_id: int, arguments: dict) -> str:
     total_km = sum((a.distance_m or 0) for a in rows) / 1000
     total_min = sum((a.duration_sec or 0) for a in rows) / 60
 
+    # Nome dello sport in italiano e unità giusta: per la bici il modello deve
+    # leggere km/h, non minuti al chilometro.
+    from app.sports import label_of, speed_label
+
     lines = []
     for a in rows:
         when = a.start_time.strftime("%d/%m/%Y") if a.start_time else "—"
         km = (a.distance_m or 0) / 1000
         minutes = (a.duration_sec or 0) / 60
-        pace = ""
-        if a.distance_m and a.duration_sec and a.distance_m > 500:
-            sec_per_km = a.duration_sec / (a.distance_m / 1000)
-            pace = f", passo {int(sec_per_km // 60)}:{int(sec_per_km % 60):02d}/km"
+        speed = speed_label(a)
+        speed_part = f", {speed}" if speed else ""
         lines.append(
-            f"[id {a.garmin_activity_id}] {when} · {a.activity_type or 'attività'} · "
-            f"{km:.1f} km · {minutes:.0f} min{pace} · FC media {_n(a.avg_hr, 0)}"
+            f"[id {a.external_id}] {when} · {label_of(a)} · "
+            f"{km:.1f} km · {minutes:.0f} min{speed_part} · FC media {_n(a.avg_hr, 0)}"
         )
 
     header = (
@@ -242,7 +259,7 @@ def tool_get_activity_detail(db: Session, user_id: int, arguments: dict) -> str:
 
 def tool_get_performance(db: Session, user_id: int, arguments: dict) -> str:
     """VO2max, carico, HRV e training status nel tempo."""
-    start, end = _range(arguments, 30)
+    start, end = _range(arguments, 30, _today(db, user_id))
     span = (end - start).days + 1
     rows = list(db.scalars(
         select(TrainingMetric)
@@ -267,7 +284,7 @@ def tool_get_performance(db: Session, user_id: int, arguments: dict) -> str:
 
 def tool_get_body(db: Session, user_id: int, arguments: dict) -> str:
     """Peso e composizione corporea."""
-    start, end = _range(arguments, 90)
+    start, end = _range(arguments, 90, _today(db, user_id))
     span = (end - start).days + 1
     rows = list(db.scalars(
         select(BodyComposition)
@@ -291,15 +308,121 @@ def tool_get_body(db: Session, user_id: int, arguments: dict) -> str:
     return f"Composizione corporea{_period_note(span)}:\n" + "\n".join(lines)
 
 
+def tool_get_training_load(db: Session, user_id: int, arguments: dict) -> str:
+    """Fitness, fatica, forma, distribuzione delle intensità.
+
+    È il tool che risponde alle domande sullo stato di forma. Restituisce i
+    numeri calcolati dall'app, non quelli di Garmin: `training_load` per molti
+    account è vuoto, e su quel vuoto non si può ragionare.
+    """
+    from app.analysis import cache as analysis_cache
+    from app.db.models import User
+
+    user = db.get(User, user_id)
+    if user is None:
+        return "Utente non trovato."
+
+    load = analysis_cache.load_summary(db, user)
+    if not load.has_data:
+        return (
+            "Nessun allenamento negli ultimi sei mesi: non c'è un carico da "
+            "analizzare."
+        )
+
+    form_text, _ = load.form_reading
+    acwr_text, _ = load.acwr_reading
+
+    lines = [
+        f"Fitness (CTL, media 42 giorni): {_n(load.ctl, 0)}",
+        f"Fatica (ATL, media 7 giorni): {_n(load.atl, 0)}",
+        f"Forma (TSB = fitness − fatica): {_n(load.tsb, 0)} — {form_text}",
+        f"Carico ultimi 7 giorni: {_n(load.weekly_load, 0)} "
+        f"(7 giorni prima: {_n(load.previous_weekly_load, 0)})",
+        f"Rapporto acuto/cronico: {_n(load.acwr, 2)} — {acwr_text}",
+        f"Monotonia settimanale: {_n(load.monotony, 2)}",
+    ]
+
+    if load.zones.is_readable:
+        pct = load.zones.percentages
+        lines.append(
+            "Distribuzione del tempo: "
+            + ", ".join(f"Z{i + 1} {p:.0f}%" for i, p in enumerate(pct))
+        )
+
+    profile = load.profile
+    lines.append(
+        f"Soglie usate: FC max {profile.hr_max} ({profile.source_of('hr_max')}), "
+        f"FC riposo {profile.hr_rest} ({profile.source_of('hr_rest')}), "
+        f"soglia {profile.lthr} ({profile.source_of('lthr')})."
+    )
+    if not load.is_reliable:
+        lines.append(
+            "Attenzione: buona parte degli allenamenti non ha la frequenza "
+            "cardiaca, quindi questi numeri sono più stima che misura."
+        )
+
+    return "Carico di allenamento:\n" + "\n".join(lines)
+
+
+def tool_get_records(db: Session, user_id: int, arguments: dict) -> str:
+    """I primati personali, calcolati dallo storico."""
+    from app.analysis.records import personal_records
+    from app.db.models import User
+    from app.sports import primary_sport
+
+    user = db.get(User, user_id)
+    activities = q.recent_activities(db, user_id, 500)
+    records = personal_records(activities, primary_sport(user) if user else "running")
+    if not records:
+        return "Non ci sono ancora abbastanza allenamenti per estrarre dei primati."
+
+    lines = []
+    for record in records:
+        when = f" — {record.day.strftime('%d/%m/%Y')}" if record.day else ""
+        detail = f" ({record.detail})" if record.detail else ""
+        note = " [tempo stimato dal ritmo medio]" if record.estimated else ""
+        lines.append(f"{record.label}: {record.value}{detail}{when}{note}")
+    return "Primati personali:\n" + "\n".join(lines)
+
+
 def tool_get_goal(db: Session, user_id: int, arguments: dict) -> str:
     """Obiettivo attivo dell'utente."""
     return describe_goal(active_goal(db, user_id))
 
 
+def tool_get_training_plan(db: Session, user_id: int, arguments: dict) -> str:
+    """Il piano di allenamento attivo (settimana corrente e prossima)."""
+    from app.training import current_week_number, get_active_plan, week_data
+
+    plan = get_active_plan(db, user_id)
+    if plan is None:
+        return "Nessun piano di allenamento attivo in questo momento."
+
+    today = _today(db, user_id)
+    current_week = current_week_number(plan, today)
+    
+    lines = [
+        f"Piano attivo: {plan.plan_json.get('title', 'Senza titolo')}",
+        f"Razionale: {plan.plan_json.get('rationale', '')}",
+        f"Settimana corrente: {current_week} di {plan.weeks_total}",
+    ]
+    
+    for w in [current_week, current_week + 1]:
+        w_data = week_data(plan, w)
+        if not w_data:
+            continue
+        lines.append(f"\nSettimana {w} — Focus: {w_data.get('focus', '')} (Totale km: {w_data.get('total_km', 0)})")
+        for day in w_data.get("days", []):
+            note = f" (Nota: {day.get('note')})" if day.get('note') else ""
+            lines.append(f"  - {day.get('weekday')}: {day.get('type')} — {day.get('detail')}{note}")
+
+    return "\n".join(lines)
+
+
 def tool_compare_periods(db: Session, user_id: int, arguments: dict) -> str:
     """Confronto diretto fra due periodi — la domanda più frequente in chat."""
     days = max(1, min(int(arguments.get("days") or 30), 365))
-    end_recent = date.today()
+    end_recent = _today(db, user_id)
     start_recent = end_recent - timedelta(days=days - 1)
     end_before = start_recent - timedelta(days=1)
     start_before = end_before - timedelta(days=days - 1)
@@ -428,6 +551,27 @@ TOOLS: dict[str, tuple[ToolSpec, ToolImpl]] = {
         ),
         tool_get_body,
     ),
+    "get_training_load": (
+        ToolSpec(
+            "get_training_load",
+            "Stato di forma calcolato dall'app: fitness (CTL), fatica (ATL), forma "
+            "(TSB), rapporto fra carico acuto e cronico, monotonia e distribuzione "
+            "del tempo nelle zone di frequenza cardiaca. Da usare per «come sto "
+            "messo?», «sono sovrallenato?», «posso spingere oggi?», «sono pronto "
+            "per la gara?».",
+            {"type": "object", "properties": {}},
+        ),
+        tool_get_training_load,
+    ),
+    "get_records": (
+        ToolSpec(
+            "get_records",
+            "I primati personali dell'atleta: tempi migliori sulle distanze classiche, "
+            "ritmo più veloce, uscita più lunga, settimana con più chilometri.",
+            {"type": "object", "properties": {}},
+        ),
+        tool_get_records,
+    ),
     "get_goal": (
         ToolSpec(
             "get_goal",
@@ -435,6 +579,16 @@ TOOLS: dict[str, tuple[ToolSpec, ToolImpl]] = {
             {"type": "object", "properties": {}},
         ),
         tool_get_goal,
+    ),
+    "get_training_plan": (
+        ToolSpec(
+            "get_training_plan",
+            "Il piano di allenamento attivo generato per l'atleta. Restituisce la "
+            "settimana corrente e la successiva, con il dettaglio giornaliero di "
+            "tipologia di allenamento e durata/distanza.",
+            {"type": "object", "properties": {}},
+        ),
+        tool_get_training_plan,
     ),
     "compare_periods": (
         ToolSpec(

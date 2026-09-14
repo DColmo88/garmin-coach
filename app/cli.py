@@ -3,6 +3,7 @@
     python -m app.cli create-invite [--expires-days 30]
     python -m app.cli list-users
     python -m app.cli set-admin <email>
+    python -m app.cli reset-password <email> <nuova-password>
     python -m app.cli bootstrap-from-env
 """
 from __future__ import annotations
@@ -19,7 +20,11 @@ from app.db.models import InviteCode, User
 
 
 def create_invite(expires_days: int | None = None) -> str:
-    """Crea un codice invito e lo restituisce."""
+    """Crea un invito e restituisce il **link** da mandare.
+
+    Non il codice nudo: `/register` legge `?invite=` e riempie il campo da
+    solo, mentre un codice costringe chi lo riceve a capire dove incollarlo.
+    """
     init_db()
     code = secrets.token_urlsafe(8)
     expires = datetime.utcnow() + timedelta(days=expires_days) if expires_days else None
@@ -29,7 +34,10 @@ def create_invite(expires_days: int | None = None) -> str:
         db.commit()
     finally:
         db.close()
-    return code
+
+    from app.routers.admin import invite_link
+
+    return invite_link(code)
 
 
 def list_users() -> list[str]:
@@ -43,7 +51,8 @@ def list_users() -> list[str]:
                 f for f in ("admin" if u.is_admin else "", "" if u.is_active else "disattivato") if f
             )
             last = u.last_sync_at.strftime("%Y-%m-%d %H:%M") if u.last_sync_at else "mai"
-            rows.append(f"{u.id}\t{u.garmin_email}\tultima sync: {last}\t{flags}")
+            source = u.connection.provider if u.connection else "non collegato"
+            rows.append(f"{u.id}\t{u.email}\t{source}\tultima sync: {last}\t{flags}")
         return rows
     finally:
         db.close()
@@ -54,7 +63,7 @@ def set_admin(email: str) -> bool:
     init_db()
     db = SessionLocal()
     try:
-        user = db.scalar(select(User).where(User.garmin_email == email.strip().lower()))
+        user = db.scalar(select(User).where(User.email == email.strip().lower()))
         if user is None:
             return False
         user.is_admin = True
@@ -64,14 +73,65 @@ def set_admin(email: str) -> bool:
         db.close()
 
 
+def reset_password(email: str, new_password: str) -> str:
+    """Reimposta la password di un utente.
+
+    È il recupero password dell'app: non c'è un «ho dimenticato» via email
+    perché non c'è SMTP configurato, e aggiungerlo per due utenti sarebbe un
+    servizio esterno in più da tenere in piedi.
+    """
+    from app.auth import service
+
+    init_db()
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == email.strip().lower()))
+        if user is None:
+            return f"Utente {email} non trovato."
+        try:
+            service.set_password(db, user, new_password)
+        except service.WeakPassword as exc:
+            return str(exc)
+        return f"Password di {email} reimpostata."
+    finally:
+        db.close()
+
+
+def delete_user(email: str, confirmed: bool = False) -> str:
+    """Cancella un account e tutti i suoi dati. Irreversibile.
+
+    Serve `--yes`: è l'unico comando della CLI che distrugge qualcosa, e
+    scriverlo per sbaglio in un terminale non deve bastare a eseguirlo.
+    """
+    from app.auth import service
+
+    init_db()
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == email.strip().lower()))
+        if user is None:
+            return f"Utente {email} non trovato."
+        if not confirmed:
+            return (
+                f"Questo cancella {email} e tutti i suoi dati, senza copia di "
+                "sicurezza. Riesegui con --yes per confermare."
+            )
+        service.delete_account(db, user)
+        return f"Account {email} e dati cancellati."
+    finally:
+        db.close()
+
+
 def bootstrap_from_env(validate: bool = True) -> str:
     """Crea il primo utente admin dalle credenziali GARMIN_* del .env.
 
-    È il percorso di migrazione dalla v1 single-user: le credenziali che stavano
-    nell'ambiente diventano un utente vero, con password cifrata nel DB.
-    Il valore della password non viene mai stampato.
+    Percorso di migrazione dalla v1 single-user. Dalla v3 crea **due** cose
+    distinte: l'account dell'app (email + password) e la connessione Garmin.
+    All'inizio la password dell'app coincide con quella di Garmin — è quello
+    che l'utente già conosce — e si cambia da /settings.
     """
     from app.auth.security import encrypt_secret, hash_password
+    from app.db.models import ProviderConnection
 
     email = (os.getenv("GARMIN_EMAIL") or "").strip().lower()
     password = os.getenv("GARMIN_PASSWORD") or ""
@@ -81,7 +141,7 @@ def bootstrap_from_env(validate: bool = True) -> str:
     init_db()
     db = SessionLocal()
     try:
-        if db.scalar(select(User).where(User.garmin_email == email)):
+        if db.scalar(select(User).where(User.email == email)):
             return f"L'utente {email} esiste già."
 
         if validate:
@@ -91,15 +151,18 @@ def bootstrap_from_env(validate: bool = True) -> str:
                 return f"Garmin ha rifiutato le credenziali di {email}: utente non creato."
 
         is_first = db.scalar(select(User.id).limit(1)) is None
-        db.add(
-            User(
-                garmin_email=email,
-                garmin_password_hash=hash_password(password),
-                garmin_password_encrypted=encrypt_secret(password),
-                display_name=email.split("@")[0].replace(".", " ").title(),
-                is_admin=is_first,
-            )
+        user = User(
+            email=email,
+            password_hash=hash_password(password),
+            display_name=email.split("@")[0].replace(".", " ").title(),
+            is_admin=is_first,
         )
+        db.add(user)
+        db.flush()
+        db.add(ProviderConnection(
+            user_id=user.id, provider="garmin", external_id=email,
+            secret_encrypted=encrypt_secret(password), status="ok",
+        ))
         db.commit()
         return f"Utente {email} creato{' come admin' if is_first else ''}."
     finally:
@@ -167,6 +230,16 @@ def main() -> None:
     p_admin = sub.add_parser("set-admin", help="promuove un utente ad admin")
     p_admin.add_argument("email")
 
+    p_pw = sub.add_parser("reset-password", help="reimposta la password di un utente")
+    p_pw.add_argument("email")
+    p_pw.add_argument("password")
+
+    p_del = sub.add_parser(
+        "delete-user", help="cancella un account e tutti i suoi dati (irreversibile)"
+    )
+    p_del.add_argument("email")
+    p_del.add_argument("--yes", action="store_true", help="conferma la cancellazione")
+
     p_boot = sub.add_parser(
         "bootstrap-from-env", help="crea il primo utente dalle credenziali nel .env"
     )
@@ -186,6 +259,10 @@ def main() -> None:
         print("\n".join(rows) if rows else "Nessun utente registrato.")
     elif args.cmd == "set-admin":
         print("Fatto." if set_admin(args.email) else f"Utente {args.email} non trovato.")
+    elif args.cmd == "reset-password":
+        print(reset_password(args.email, args.password))
+    elif args.cmd == "delete-user":
+        print(delete_user(args.email, confirmed=args.yes))
     elif args.cmd == "bootstrap-from-env":
         print(bootstrap_from_env(validate=not args.no_validate))
     elif args.cmd == "vapid-keys":

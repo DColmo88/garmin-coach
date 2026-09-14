@@ -32,9 +32,14 @@ PEAKING = {
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", display_name="Davide",
-             garmin_password_encrypted="e", garmin_password_hash="h")
+    from app.db.models import ProviderConnection
+
+    u = User(email="a@x.it", display_name="Davide",
+             password_hash="h")
     db.add(u)
+    db.flush()
+    db.add(ProviderConnection(user_id=u.id, provider="garmin",
+                              external_id="a@x.it", secret_encrypted="cifrato"))
     db.commit()
     return u
 
@@ -193,7 +198,7 @@ def test_failed_delivery_does_not_block_a_retry(db, user):
 
 
 def test_dedup_is_per_user(db, user):
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
 
@@ -402,18 +407,41 @@ def test_no_channel_means_nothing_is_logged(db, user, monkeypatch):
     assert db.query(NotificationLog).count() == 0
 
 
-def test_dispatch_computes_the_snapshot_itself(db, user, fake_channel):
-    """Chiamato senza snapshot, se lo calcola dal database."""
-    from app.db.models import DailyWellness, SleepRecord, TrainingMetric
+def _seed_an_overloaded_month(db, user) -> None:
+    """Tre settimane tranquille e poi una settimana durissima.
+
+    Il carico si ricava dalle attività, non da `training_load`: Garmin quel
+    campo non lo popola per tutti gli account, ed era il motivo per cui questa
+    regola in produzione non poteva scattare mai.
+    """
+    from app.db.models import Activity, DailyWellness, SleepRecord
 
     today = date.today()
     for i in range(30):
         day = today - timedelta(days=i)
-        db.add(TrainingMetric(user_id=user.id, day=day,
-                              training_load=600 if i < 7 else 200))
         db.add(DailyWellness(user_id=user.id, day=day, resting_hr=55))
         db.add(SleepRecord(user_id=user.id, day=day, sleep_score=75))
+
+    # Settimana in corso: un'ora tutti i giorni, a ritmo impegnativo.
+    for i in range(7):
+        db.add(Activity(
+            user_id=user.id, external_id=5000 + i, activity_type="running",
+            start_time=datetime.combine(today - timedelta(days=i), datetime.min.time()),
+            duration_sec=3600, avg_hr=160, max_hr=180, distance_m=12000,
+        ))
+    # Le tre settimane prima: mezz'ora blanda ogni tre giorni.
+    for i in range(7, 28, 3):
+        db.add(Activity(
+            user_id=user.id, external_id=6000 + i, activity_type="running",
+            start_time=datetime.combine(today - timedelta(days=i), datetime.min.time()),
+            duration_sec=1800, avg_hr=125, max_hr=150, distance_m=5000,
+        ))
     db.commit()
+
+
+def test_dispatch_computes_the_snapshot_itself(db, user, fake_channel):
+    """Chiamato senza snapshot, se lo calcola dal database."""
+    _seed_an_overloaded_month(db, user)
 
     assert dispatch_for_user(db, user) == 1
     assert fake_channel.sent[0].event_type == "overtraining"
@@ -425,18 +453,10 @@ def test_dispatch_computes_the_snapshot_itself(db, user, fake_channel):
 
 def test_pipeline_dispatches_notifications(db, user, monkeypatch, fake_channel):
     from app import pipeline
-    from app.db.models import DailyWellness, SleepRecord, TrainingMetric
 
-    today = date.today()
-    for i in range(30):
-        day = today - timedelta(days=i)
-        db.add(TrainingMetric(user_id=user.id, day=day,
-                              training_load=600 if i < 7 else 200))
-        db.add(DailyWellness(user_id=user.id, day=day, resting_hr=55))
-        db.add(SleepRecord(user_id=user.id, day=day, sleep_score=75))
-    db.commit()
+    _seed_an_overloaded_month(db, user)
 
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {"activities": 0})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {"activities": 0})
     result = pipeline.run_for_user(db, user)
 
     assert result.notifications == 1
@@ -450,7 +470,7 @@ def test_notification_failure_does_not_break_the_pipeline(db, user, monkeypatch)
         raise RuntimeError("dispatcher rotto")
 
     monkeypatch.setattr("app.notifications.dispatcher.dispatch_for_user", boom)
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {"activities": 3})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {"activities": 3})
 
     result = pipeline.run_for_user(db, user)
     assert result.synced == {"activities": 3}  # la sync è comunque andata

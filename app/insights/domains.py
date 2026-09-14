@@ -41,6 +41,11 @@ class PageReading:
     action: str = ""
     tone: str = "neutral"
     notes: list[MetricNote] = field(default_factory=list)
+    # Falso quando la lettura è «non ho abbastanza dati». Serve a chi la
+    # riscrive con l'AI: senza misurazioni non c'è niente da dire meglio, e
+    # una frase generica del modello è peggio di questa, che almeno dice cosa
+    # fare per uscirne.
+    enough_data: bool = True
 
     @property
     def has_content(self) -> bool:
@@ -55,6 +60,55 @@ def _sentence(parts: list[str]) -> str:
     return joined[0].upper() + joined[1:] + "."
 
 
+# Garmin restituisce il training status come costante di enumerazione, con
+# tanto di suffisso numerico: «UNPRODUCTIVE_1». Finiva così com'era dentro le
+# frasi dell'app.
+TRAINING_STATUS_LABELS = {
+    "productive": "allenamento produttivo",
+    "maintaining": "stai mantenendo",
+    "peaking": "sei al picco",
+    "unproductive": "allenamento improduttivo",
+    "overreaching": "carico eccessivo",
+    "detraining": "stai perdendo condizione",
+    "recovery": "in recupero",
+    "no_status": "non pervenuto",
+    "strained": "sotto sforzo eccessivo",
+}
+
+
+HRV_STATUS_LABELS = {
+    "balanced": "in equilibrio",
+    "unbalanced": "sbilanciato",
+    "low": "basso",
+    "poor": "molto basso",
+    "none": None,
+}
+
+
+def hrv_status_label(raw: str | None) -> str | None:
+    """Da «BALANCED» a «in equilibrio»."""
+    if not raw:
+        return None
+    key = str(raw).strip().lower()
+    if key in HRV_STATUS_LABELS:
+        return HRV_STATUS_LABELS[key]
+    return key.replace("_", " ") or None
+
+
+def training_status_label(raw: str | None) -> str | None:
+    """Da «UNPRODUCTIVE_1» a «allenamento improduttivo».
+
+    Se lo stato non è fra quelli noti si restituisce comunque qualcosa di
+    leggibile: minuscolo, senza trattini bassi e senza il suffisso numerico.
+    """
+    if not raw:
+        return None
+    key = str(raw).strip().lower().rstrip("_0123456789")
+    if key in TRAINING_STATUS_LABELS:
+        return TRAINING_STATUS_LABELS[key]
+    return key.replace("_", " ") or None
+
+
 def _no_data(what: str) -> PageReading:
     """`what` va scritto come completamento di «dati su…» (es. «sul sonno»)."""
     return PageReading(
@@ -62,6 +116,7 @@ def _no_data(what: str) -> PageReading:
         evidence="Servono almeno qualche giorno di misurazioni per dire qualcosa di utile.",
         action="Premi Sincronizza e torna fra un paio di giorni.",
         tone="neutral",
+        enough_data=False,
     )
 
 
@@ -244,7 +299,7 @@ def read_health(rows: list) -> PageReading:
             notes.append(MetricNote(
                 "battery",
                 f"Body Battery si ricarica in media solo fino a {round(battery_mean)}. "
-                "Il corpo non chiude la giornata in pari: il debito si accumula.",
+                "Vai a dormire con meno energia di quanta ne servirebbe, e la sera dopo parti da più in basso.",
                 "bad",
             ))
         elif battery_mean < BATTERY_FULL_RECHARGE:
@@ -316,7 +371,7 @@ def read_health(rows: list) -> PageReading:
         )
     if recovering_badly:
         return PageReading(
-            "Il recupero notturno non chiude.",
+            "Di notte non ti ricarichi del tutto.",
             evidence + " Il Body Battery non torna su.",
             "Guarda cosa c'è oltre l'allenamento: lavoro, sonno, alcol. "
             "Il corpo non distingue le fonti di stress.",
@@ -331,33 +386,37 @@ def read_health(rows: list) -> PageReading:
 
 
 # ============================================================================
-# Performance
+# Forma e carico
 # ============================================================================
 
 VO2MAX_MEANINGFUL = 0.5
 LOAD_RATIO_HIGH = 1.4
 LOAD_RATIO_LOW = 0.8
+CTL_RISE_MEANINGFUL = 3.0  # punti di fitness guadagnati in un mese
 
 
-def read_performance(rows: list) -> PageReading:
-    """VO2max, carico e HRV: la fitness sta salendo e a che prezzo."""
+def read_fitness(rows: list, load=None) -> PageReading:
+    """Fitness, fatica e forma: dove sei nel ciclo carico-recupero.
+
+    `rows` sono le metriche giornaliere di Garmin (VO₂max, HRV); `load` è il
+    `LoadSummary` calcolato dalle attività. Il carico viene da lì e non da
+    `training_load`, che per molti account Garmin non popola mai — era il
+    motivo per cui questa lettura parlava sempre di un rapporto assente.
+    """
     vo2 = [r.vo2max for r in rows]
-    load = [r.training_load for r in rows]
-    hrv = [r.hrv_weekly_avg for r in rows]
+    has_load = load is not None and load.has_data
 
-    if st.coverage(vo2) < MIN_COVERAGE and st.coverage(load) < MIN_COVERAGE:
-        return _no_data("sulle metriche di performance")
+    if st.coverage(vo2) < MIN_COVERAGE and not has_load:
+        return _no_data("sulla tua forma")
 
     vo2_now = st.latest(vo2)
-    recent_vo2, earlier_vo2 = st.split(vo2, 14)
-    vo2_delta = st.delta(recent_vo2, earlier_vo2)
-
-    acute = st.mean(st.split(load, 7)[0])
-    chronic = st.mean(load)
-    ratio = acute / chronic if acute is not None and chronic else None
-
-    status = next((r.training_status for r in reversed(rows) if r.training_status), None)
+    vo2_delta = st.delta(*st.split(vo2, 14))
     hrv_status = next((r.hrv_status for r in reversed(rows) if r.hrv_status), None)
+    status = next((r.training_status for r in reversed(rows) if r.training_status), None)
+
+    ratio = load.acwr if has_load else None
+    tsb = load.tsb if has_load else None
+    ctl = load.ctl if has_load else None
 
     notes: list[MetricNote] = []
 
@@ -371,6 +430,104 @@ def read_performance(rows: list) -> PageReading:
             "good" if rising else "warn",
         ))
 
+    if has_load:
+        notes.extend(_load_notes(load))
+
+    if hrv_status and hrv_status_label(hrv_status):
+        low = "unbalanc" in hrv_status.lower() or "low" in hrv_status.lower()
+        notes.append(MetricNote(
+            "hrv",
+            f"HRV {hrv_status_label(hrv_status)}. "
+            + ("Il sistema nervoso non è tornato in equilibrio." if low
+               else "Il sistema nervoso ha assorbito il carico."),
+            "warn" if low else "good",
+        ))
+
+    # --- verdetto ---
+    evidence_parts = []
+    if ctl is not None:
+        evidence_parts.append(f"fitness {st.fmt(ctl, 0)}")
+    if tsb is not None:
+        evidence_parts.append(f"forma {st.fmt(tsb, 0)}")
+    if ratio is not None:
+        evidence_parts.append(f"rapporto di carico {st.fmt(ratio, 1)}")
+    if vo2_now is not None:
+        evidence_parts.append(f"VO₂max {st.fmt(vo2_now, 1)}")
+    if training_status_label(status):
+        evidence_parts.append(f"Garmin dice «{training_status_label(status)}»")
+    evidence = _sentence(evidence_parts)
+
+    overloaded = ratio is not None and ratio >= LOAD_RATIO_HIGH
+    buried = tsb is not None and tsb <= -30
+    peaked = tsb is not None and tsb >= 25
+    improving = vo2_delta is not None and vo2_delta >= VO2MAX_MEANINGFUL
+    declining = vo2_delta is not None and vo2_delta <= -VO2MAX_MEANINGFUL
+
+    # L'ordine conta: prima i casi in cui c'è qualcosa da fermare, poi quelli
+    # in cui c'è qualcosa da sfruttare, infine la lettura di tendenza.
+    if overloaded and buried:
+        return PageReading(
+            "Sei già stanco e stai continuando a caricare.",
+            evidence + " Fatica sopra la fitness e carico ancora in salita.",
+            "Questa settimana taglia il volume di un terzo. Non è una pausa: è la "
+            "condizione perché il lavoro delle ultime settimane diventi forma.",
+            "bad", notes,
+        )
+    if overloaded:
+        return PageReading(
+            "Stai salendo più in fretta di quanto il corpo abbia costruito.",
+            evidence + " Il carico dell'ultima settimana è oltre la soglia.",
+            "Tieni questo volume invece di alzarlo ancora: consolidare una settimana "
+            "costa meno di recuperare un infortunio.",
+            "warn", notes,
+        )
+    if buried:
+        return PageReading(
+            "La fatica ha superato la fitness.",
+            evidence + " È il momento del ciclo in cui i numeri peggiorano prima "
+                       "di migliorare.",
+            "Se è uno scarico programmato, va bene così. Se non lo è, inserisci "
+            "due giorni facili adesso.",
+            "warn", notes,
+        )
+    if peaked:
+        return PageReading(
+            "Sei fresco: la forma è al massimo.",
+            evidence + " La fatica è smaltita e la fitness è ancora lì.",
+            "È la finestra per una gara o una sessione chiave. Restare così per "
+            "settimane, invece, significa perdere quello che hai costruito.",
+            "good", notes,
+        )
+    if improving:
+        return PageReading(
+            "La fitness sta salendo.",
+            evidence + " Con un carico che il corpo regge.",
+            "Continua così: quando il VO₂max sale a carico stabile vuol dire che "
+            "l'allenamento è tarato bene.",
+            "good", notes,
+        )
+    if declining:
+        return PageReading(
+            "La fitness sta calando.",
+            evidence + " Il VO₂max è in discesa.",
+            "Se non sei in scarico programmato ti manca stimolo: aggiungi una "
+            "sessione di qualità a settimana.",
+            "warn", notes,
+        )
+    return PageReading(
+        "Sei in equilibrio.",
+        evidence + " Carico e recupero si compensano.",
+        "L'equilibrio non fa crescere: per salire serve un cambiamento, più volume "
+        "o più intensità, non entrambi insieme.",
+        "neutral", notes,
+    )
+
+
+def _load_notes(load) -> list[MetricNote]:
+    """Le note che accompagnano i grafici del carico."""
+    notes: list[MetricNote] = []
+
+    ratio = load.acwr
     if ratio is not None:
         if ratio >= LOAD_RATIO_HIGH:
             notes.append(MetricNote(
@@ -394,67 +551,29 @@ def read_performance(rows: list) -> PageReading:
                 "good",
             ))
 
-    if hrv_status:
-        low = "unbalanc" in hrv_status.lower() or "low" in hrv_status.lower()
+    mono = load.monotony
+    if mono is not None and mono >= 2.0:
         notes.append(MetricNote(
-            "hrv",
-            f"HRV: {hrv_status}. " + ("Il sistema nervoso non è tornato in equilibrio."
-                                      if low else "Sistema nervoso in equilibrio."),
-            "warn" if low else "good",
+            "load",
+            f"Monotonia {st.fmt(mono, 1)}: la settimana è tutta uguale. Stesso "
+            "carico distribuito con giorni duri e giorni vuoti allena di più e "
+            "logora di meno.",
+            "warn",
         ))
 
-    # --- verdetto ---
-    evidence_parts = []
-    if vo2_now is not None:
-        evidence_parts.append(f"VO₂max {st.fmt(vo2_now, 1)}")
-    if ratio is not None:
-        evidence_parts.append(f"rapporto di carico {st.fmt(ratio, 1)}")
-    if status:
-        evidence_parts.append(f"Garmin dice «{status}»")
-    evidence = _sentence(evidence_parts)
+    tsb, tone = load.form_reading
+    notes.append(MetricNote("pmc", f"Forma: {tsb}.",
+                            "good" if tone == "good" else tone))
 
-    overloaded = ratio is not None and ratio >= LOAD_RATIO_HIGH
-    improving = vo2_delta is not None and vo2_delta >= VO2MAX_MEANINGFUL
-    declining = vo2_delta is not None and vo2_delta <= -VO2MAX_MEANINGFUL
+    if not load.is_reliable and load.has_data:
+        notes.append(MetricNote(
+            "pmc",
+            "Una parte degli allenamenti non ha la frequenza cardiaca: per quelli "
+            "il carico è stimato dalla sola durata, quindi le curve sono indicative.",
+            "neutral",
+        ))
 
-    if overloaded and improving:
-        return PageReading(
-            "Stai crescendo, ma su un carico che non regge a lungo.",
-            evidence + " I risultati arrivano, il rapporto di carico è oltre la soglia.",
-            "Consolida: tieni questo volume per una settimana invece di alzarlo ancora. "
-            "L'adattamento avviene nel recupero, non nello sforzo.",
-            "warn", notes,
-        )
-    if overloaded:
-        return PageReading(
-            "Il carico è sopra quello che il tuo corpo ha costruito.",
-            evidence + " Senza un guadagno di fitness che lo giustifichi.",
-            "Riduci il volume del 20% questa settimana. Stai pagando senza incassare.",
-            "bad", notes,
-        )
-    if improving:
-        return PageReading(
-            "La fitness sta salendo.",
-            evidence + " Con un carico sostenibile.",
-            "Continua così: quando il VO₂max sale a carico stabile, vuol dire che "
-            "l'allenamento è tarato bene.",
-            "good", notes,
-        )
-    if declining:
-        return PageReading(
-            "La fitness sta calando.",
-            evidence + " Il VO₂max è in discesa.",
-            "Se non sei in scarico programmato, ti manca stimolo: aggiungi una "
-            "sessione di qualità a settimana.",
-            "warn", notes,
-        )
-    return PageReading(
-        "Fitness stabile.",
-        evidence + " Nessun movimento significativo.",
-        "Per farla salire serve un cambiamento: più volume o più intensità, "
-        "non entrambi insieme.",
-        "neutral", notes,
-    )
+    return notes
 
 
 # ============================================================================
@@ -476,6 +595,7 @@ def read_body(rows: list) -> PageReading:
             "solo la media su più giorni dice qualcosa.",
             "Pesati con una certa regolarità, sempre nelle stesse condizioni.",
             "neutral",
+            enough_data=False,
         )
 
     kg = [w / 1000 for w in st.clean(weights)]
@@ -589,8 +709,14 @@ HARD_HR_FRACTION = 0.82   # sopra l'82% = duro
 POLARIZED_EASY_TARGET = 75  # % di uscite facili in un allenamento ben distribuito
 
 
-def read_activities(activities: list) -> PageReading:
-    """Volume, costanza e distribuzione delle intensità."""
+def read_activities(activities: list, zones=None) -> PageReading:
+    """Volume, costanza e distribuzione delle intensità.
+
+    Se `zones` c'è (il tempo per zona scaricato da Garmin), la distribuzione si
+    legge sui minuti effettivi. Altrimenti si ripiega sulla FC media dell'intera
+    uscita, che è una semplificazione: un fartlek ha una media tiepida e non è
+    né facile né duro.
+    """
     if len(activities) < 3:
         return _no_data("sui tuoi allenamenti")
 
@@ -626,7 +752,15 @@ def read_activities(activities: list) -> PageReading:
 
     easy_pct = 100 * easy / classified if classified else None
 
-    if easy_pct is not None and classified >= 5:
+    # Il tempo per zona, quando c'è, vince sulla stima per uscita intera.
+    if zones is not None and zones.is_readable:
+        from app.analysis.zones import read_distribution
+
+        text, tone = read_distribution(zones)
+        notes.append(MetricNote("distribution", text, tone))
+        easy_pct = zones.easy_pct
+        classified = max(classified, 5)  # il dato c'è: la lettura è ammessa
+    elif easy_pct is not None and classified >= 5:
         if easy_pct < 50:
             notes.append(MetricNote(
                 "distribution",
@@ -682,10 +816,14 @@ def read_activities(activities: list) -> PageReading:
             "warn", notes,
         )
 
+    # Il conteggio parla di minuti quando il tempo per zona c'è, di uscite
+    # quando si è dovuto stimare dalla FC media dell'intera seduta.
+    unit = "del tempo" if (zones is not None and zones.is_readable) else "delle uscite"
+
     if easy_pct is not None and classified >= 5 and easy_pct < 50:
         return PageReading(
             "Corri quasi sempre alla stessa intensità media.",
-            evidence + f" Solo il {round(easy_pct)}% delle uscite è in fascia facile.",
+            evidence + f" Solo il {round(easy_pct)}% {unit} è in fascia facile.",
             "Rallenta le uscite facili al punto da poter parlare, e tieni l'intensità "
             "per una o due sessioni a settimana. Stessa fatica, più risultato.",
             "warn", notes,
@@ -693,7 +831,7 @@ def read_activities(activities: list) -> PageReading:
     if easy_pct is not None and easy_pct >= POLARIZED_EASY_TARGET:
         return PageReading(
             "Volume e distribuzione delle intensità sono impostati bene.",
-            evidence + f" Con il {round(easy_pct)}% di lavoro facile.",
+            evidence + f" Con il {round(easy_pct)}% {unit} in lavoro facile.",
             "Su questa base puoi crescere: alza il volume del 10% a settimana, "
             "non di più.",
             "good", notes,

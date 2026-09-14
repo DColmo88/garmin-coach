@@ -17,14 +17,13 @@ from sqlalchemy.orm import Session
 
 from app import queries as q
 from app.ai import usage
-from app.ai.insights import top_insights
 from app.ai.provider import get_provider
 from app.ai.readiness import compute_readiness
 from app.db.models import DailyCoachCache, User
+from app.clock import naive_utc, today_for
 from app.goals import active_goal
 from app.garmin import service
 from app.garmin.client import GarminClientError
-from app.garmin.sync import sync_all
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +51,25 @@ class PipelineResult:
 # --------------------------- passi ---------------------------
 
 def do_sync(db: Session, user: User, result: PipelineResult) -> None:
-    """Scarica i dati da Garmin e aggiorna lo stato di sync dell'utente."""
+    """Scarica i dati dalla sorgente collegata e aggiorna lo stato di sync.
+
+    Quale sorgente sia lo decide `app.providers`: qui non si sa più se è Garmin
+    o Strava, e va bene così — la pipeline si occupa dell'ordine dei passi, non
+    di chi risponde alle richieste.
+    """
+    from app import providers
+
+    if user.connection is None:
+        # Registrato ma non ancora collegato: non è un errore, è il momento
+        # prima del primo collegamento. Segnalarlo come guasto farebbe partire
+        # le notifiche di sync fallita a chi non ha ancora fatto niente.
+        result.synced = {}
+        return
+
     try:
-        result.synced = sync_all(db, user)
+        result.synced = providers.sync_user(db, user)
         service.clear_cache(user.id)
-        user.last_sync_at = datetime.utcnow()
+        user.last_sync_at = naive_utc()
         user.sync_failures = 0
         db.commit()
     except GarminClientError as exc:
@@ -88,16 +101,32 @@ def _record_sync_failure(db: Session, user: User) -> None:
 def refresh_daily_cache(
     db: Session, user: User, day: date | None = None, force_ai: bool = False
 ) -> DailyCoachCache:
-    """Ricalcola readiness e insight del giorno e li salva in cache.
+    """Ricalcola quello che si vede sulla home e lo salva in cache.
 
-    Readiness e insight sono deterministici: si ricalcolano sempre, non costano
-    nulla. Il messaggio del coach passa dall'AI **una sola volta al giorno** —
-    se la riga di oggi è già stata scritta dall'AI non si richiama il modello.
+    La **prontezza** è deterministica e si ricalcola sempre: è gratis.
+
+    Il **messaggio del coach**, gli **insight** e le **letture delle pagine**
+    passano dall'AI, e per loro vale la regola di sempre: una volta al giorno
+    per utente. Se la riga di oggi è già stata scritta dall'AI non si richiama
+    il modello, altrimenti ogni apertura della home sarebbe una chiamata.
+
+    Tutte e tre condividono lo stesso briefing, costruito una volta sola.
+
+    **L'AI parla solo di oggi.** La regola «una chiamata al giorno» reggeva
+    finché il giorno era uno solo; da quando `/coach` accetta `?day=`, ogni
+    data mai vista era una riga di cache nuova e quindi tre chiamate al
+    modello — due delle quali sul modello grande. Bastava cliccare «giorno
+    precedente» venti volte, o un prefetch del browser sui link di
+    navigazione, per bruciare il budget del mese. Per le date passate si legge
+    quello che c'è in cache e per il resto si mostra il deterministico, che è
+    anche l'unica cosa sensata: il coaching di tre giorni fa scritto oggi
+    saprebbe com'è andata a finire.
     """
-    day = day or date.today()
-    snap = q.coach_snapshot(db, user.id)
+    today = today_for(user)
+    day = day or today
+    ai_allowed = day == today
+    snap = q.coach_snapshot(db, user.id, day)
     readiness = compute_readiness(snap)
-    insights = top_insights(snap, 3)
     goal = active_goal(db, user.id)
 
     row = db.scalar(
@@ -112,13 +141,48 @@ def refresh_daily_cache(
     # L'AI parla una volta al giorno: se ha già scritto, si riusa il testo.
     already_written_by_ai = row.source == "ai" and not force_ai
     provider = get_provider()
-    coaching = provider.coach(snap, readiness, goal) if not already_written_by_ai else None
+    coaching = None
+    insights = None
+
+    # Seconda rete, indipendente dalla prima: un tetto sulle chiamate di tipo
+    # `coach` registrate oggi. La regola «solo il giorno corrente» ne consente
+    # una sola in condizioni normali; il tetto serve a contenere i casi che non
+    # ho previsto, allo stesso modo in cui la quota della chat contiene i suoi.
+    if ai_allowed and not already_written_by_ai:
+        try:
+            usage.check_quota(db, user, "coach")
+        except usage.QuotaExceeded as exc:
+            logger.warning("Tetto coaching raggiunto per utente %s: %s", user.id, exc)
+            ai_allowed = False
+
+    if ai_allowed and not already_written_by_ai:
+        # Il briefing si costruisce solo quando si sta per parlare col modello:
+        # è qualche query in più che non ha senso pagare a ogni pageview. Lo
+        # stesso testo serve al messaggio del coach **e** agli insight, quindi
+        # si costruisce una volta e si passa a entrambi.
+        from app.ai import briefing as briefing_builder
+        from app.ai import readings as readings_builder
+        from app.ai.insights import generate_insights
+
+        context = briefing_builder.build(db, user, day)
+        coaching = provider.coach(snap, readiness, goal, briefing=context)
+        insights, _ = generate_insights(db, user, briefing=context)
+        # Se non risponde resta `None` e le pagine tengono le frasi calcolate:
+        # una lettura mancata non deve lasciare una pagina senza intestazione.
+        page_readings = readings_builder.generate(db, user, context)
+        if page_readings:
+            row.readings_json = page_readings
 
     row.readiness_score = readiness.score
     row.readiness_label = readiness.label
-    row.insights_json = [
-        {"icon": i.icon, "title": i.title, "text": i.text, "color": i.color} for i in insights
-    ]
+
+    # La prontezza si ricalcola sempre perché è gratis. Gli insight no: adesso
+    # li scrive il modello, e rigenerarli a ogni pageview sarebbe una chiamata
+    # a ogni apertura della home.
+    if insights is not None:
+        row.insights_json = [
+            {"title": i.title, "text": i.text, "color": i.color} for i in insights
+        ]
 
     if coaching is not None:
         row.coach_message = coaching.message
@@ -138,7 +202,14 @@ def refresh_daily_cache(
                 tokens_out=coaching.tokens_out,
             )
 
-    row.generated_at = datetime.utcnow()
+    row.generated_at = naive_utc()
+
+    # Una riga nuova per una data passata non si scrive: sarebbe una riga di
+    # cache per ogni data che qualcuno digita nell'indirizzo, e non
+    # conterrebbe niente che non si possa ricalcolare in un millesimo di
+    # secondo. L'oggetto torna comunque al chiamante, solo non persistito.
+    if is_new and not ai_allowed:
+        return row
 
     if is_new:
         db.add(row)

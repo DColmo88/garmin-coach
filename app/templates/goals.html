@@ -113,9 +113,12 @@
 
       <div class="field field-wide">
         <label for="notes-{{ gt.key }}">Note per il coach</label>
-        <input id="notes-{{ gt.key }}" type="text" name="priority_notes" disabled
-               placeholder="es. ginocchio delicato, niente allenamenti il lunedì"
-               value="{{ current.priority_notes if current and current.goal_type == gt.key and current.priority_notes else '' }}" />
+        {# Un'area di testo e non una riga: qui si scrivono vincoli veri —
+           un infortunio, i giorni in cui non si può uscire — e su una riga
+           sola non ci stanno. #}
+        <textarea id="notes-{{ gt.key }}" name="priority_notes" rows="3" disabled
+                  placeholder="es. ginocchio delicato, niente allenamenti il lunedì, in trasferta ogni due settimane"
+        >{{ current.priority_notes if current and current.goal_type == gt.key and current.priority_notes else '' }}</textarea>
         <span class="field-help">Vincoli e preferenze che il coach deve tenere presenti.</span>
       </div>
     </div>
@@ -143,7 +146,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
   // Mostra solo i campi del tipo selezionato, e disabilita gli altri
   // così il browser non invia i campi delle schede nascoste.
   const form = document.getElementById("goalForm");
@@ -152,10 +155,12 @@
     form.querySelectorAll(".goal-fields").forEach((fs) => {
       const isActive = selected && fs.id === "fields-" + selected.value;
       fs.hidden = !isActive;
-      fs.querySelectorAll("input, select").forEach((el) => { el.disabled = !isActive; });
+      fs.querySelectorAll("input, select, textarea").forEach((el) => { el.disabled = !isActive; });
     });
     form.querySelectorAll(".goal-card").forEach((card) => {
-      card.classList.toggle("selected", selected && card.dataset.type === selected.value);
+      // "active", non "selected": il CSS definisce `.goal-card.active`, e con
+      // il nome sbagliato la scheda scelta non si e' mai evidenziata.
+      card.classList.toggle("active", selected && card.dataset.type === selected.value);
     });
   }
   form.querySelectorAll('input[name="goal_type"]').forEach((radio) =>

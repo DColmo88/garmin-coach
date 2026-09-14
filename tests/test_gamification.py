@@ -18,8 +18,13 @@ from app.db.models import (
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    from app.db.models import ProviderConnection
+
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
+    db.flush()
+    db.add(ProviderConnection(user_id=u.id, provider="garmin",
+                              external_id="a@x.it", secret_encrypted="cifrato"))
     db.commit()
     return u
 
@@ -29,7 +34,7 @@ def add_run(db, user_id: int, days_ago: int, km: float = 8, hour: int = 18, gid:
                             datetime.min.time()).replace(hour=hour)
     db.add(Activity(
         user_id=user_id,
-        garmin_activity_id=gid if gid is not None else days_ago * 1000 + hour,
+        external_id=gid if gid is not None else days_ago * 1000 + hour,
         activity_type="running", start_time=when,
         distance_m=km * 1000, duration_sec=km * 360,
     ))
@@ -138,10 +143,24 @@ def test_xp_from_step_goal(db, user):
 
 
 def test_bonus_for_an_active_week(db, user):
+    """Cinque giorni attivi **dentro la stessa settimana ISO**.
+
+    «Gli ultimi cinque giorni» non bastava, e per undici mesi ha funzionato per
+    caso: il bonus si conta per settimana di calendario, quindi cinque giorni a
+    ritroso cascano tutti nella stessa settimana solo se oggi è venerdì, sabato
+    o domenica. Di lunedì ne cadono quattro nella settimana prima e uno in
+    quella corrente, e il test falliva senza che nulla fosse cambiato nel
+    codice. Qui si parte dall'ultimo lunedì e si contano cinque giorni in
+    avanti, così la settimana è una sola qualunque giorno sia oggi.
+    """
+    oggi = date.today()
+    ultimo_lunedi = oggi - timedelta(days=oggi.weekday() + 7)
     for i in range(5):
-        add_run(db, user.id, days_ago=i, km=5)
+        add_run(db, user.id, days_ago=(oggi - (ultimo_lunedi + timedelta(days=i))).days, km=5)
     db.commit()
+
     state = gamification.recompute(db, user)
+
     base = 5 * (gamification.XP_PER_ACTIVITY + 5)
     assert state.total_xp >= base + gamification.XP_ACTIVE_WEEK
 
@@ -225,7 +244,7 @@ def test_century_badge(db, user):
     today = date.today().replace(day=1) + timedelta(days=5)
     for i in range(10):
         when = datetime.combine(today + timedelta(days=i), datetime.min.time())
-        db.add(Activity(user_id=user.id, garmin_activity_id=500 + i,
+        db.add(Activity(user_id=user.id, external_id=500 + i,
                         activity_type="running", start_time=when, distance_m=11000))
     db.commit()
     assert "century" in gamification.recompute(db, user).badges_json
@@ -278,7 +297,7 @@ def test_longest_streak_is_never_lost(db, user):
 
 
 def test_state_is_per_user(db, user):
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
 
@@ -327,7 +346,7 @@ def test_pipeline_recomputes_gamification(db, user, monkeypatch):
 
     add_run(db, user.id, days_ago=0, km=12)
     db.commit()
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {"activities": 1})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {"activities": 1})
 
     result = pipeline.run_for_user(db, user)
     assert result.xp > 0 and result.streak >= 1
@@ -336,7 +355,7 @@ def test_pipeline_recomputes_gamification(db, user, monkeypatch):
 def test_gamification_failure_does_not_break_the_pipeline(db, user, monkeypatch):
     from app import pipeline
 
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {"activities": 1})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {"activities": 1})
     monkeypatch.setattr("app.gamification.recompute",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("rotto")))
 
@@ -349,3 +368,60 @@ def test_coach_page_shows_the_strip(logged_client):
     page = logged_client.get("/coach").text
     assert "progress-strip" in page
     assert "Principiante" in page
+
+
+def test_xp_follows_the_load_not_the_kilometres(db, user):
+    """La contraddizione che questo chiude.
+
+    Con gli XP a chilometro, tre ore di bici tranquilla valevano dieci volte
+    un fartlek — mentre tutto il resto dell'app spiega che i chilometri non
+    descrivono l'allenamento. Adesso la moneta è il carico, la stessa su cui
+    poggiano forma, rapporto acuto/cronico e prontezza.
+    """
+    from datetime import datetime, timedelta
+
+    from app.db.models import Activity
+    from app import gamification
+
+    oggi = datetime.now()
+    # Stessa distanza, sforzo opposto.
+    db.add(Activity(user_id=user.id, source="garmin", external_id=1,
+                    activity_type="running", start_time=oggi - timedelta(days=2),
+                    duration_sec=3600, distance_m=12000, avg_hr=170))
+    db.commit()
+    duro = gamification.recompute(db, user).total_xp
+
+    db.query(Activity).delete()
+    db.query(gamification.GamificationState).delete()
+    db.add(Activity(user_id=user.id, source="garmin", external_id=2,
+                    activity_type="running", start_time=oggi - timedelta(days=2),
+                    duration_sec=3600, distance_m=12000, avg_hr=115))
+    db.commit()
+    facile = gamification.recompute(db, user).total_xp
+
+    assert duro > facile
+
+
+def test_a_declared_effort_earns_xp_without_a_heart_rate_strap(db, user):
+    """Chi non ha la fascia non deve restare al minimo sindacale."""
+    from datetime import datetime, timedelta
+
+    from app.db.models import Activity
+    from app import gamification
+
+    oggi = datetime.now()
+    db.add(Activity(user_id=user.id, source="strava", external_id=3,
+                    activity_type="running", start_time=oggi - timedelta(days=1),
+                    duration_sec=3600, distance_m=10000, rpe=9))
+    db.commit()
+    con_rpe = gamification.recompute(db, user).total_xp
+
+    db.query(Activity).delete()
+    db.query(gamification.GamificationState).delete()
+    db.add(Activity(user_id=user.id, source="strava", external_id=4,
+                    activity_type="running", start_time=oggi - timedelta(days=1),
+                    duration_sec=3600, distance_m=10000))
+    db.commit()
+    senza = gamification.recompute(db, user).total_xp
+
+    assert con_rpe > senza

@@ -4,96 +4,181 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>{% block title %}Garmin Coach{% endblock %}</title>
+  <meta name="description" content="Il tuo coach personale sui dati di Garmin Connect: prontezza, carico, forma e piani di allenamento." />
   <link rel="stylesheet" href="/static/style.css?v={{ static_v() }}" />
   <link rel="manifest" href="/static/manifest.json" />
-  <meta name="theme-color" content="#0d1117" />
+  <meta name="theme-color" content="#0b0d11" />
   <link rel="apple-touch-icon" href="/static/icon-192.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Coach" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  {# Chart.js sta in /static e non su un CDN: era l'unico script di terze
+     parti su pagine che mostrano dati sanitari, e arrivava senza
+     `integrity`. Servirlo da qui toglie la dipendenza da un host esterno e
+     permette una Content-Security-Policy che vieta ogni origine estranea. #}
+  <script src="/static/chart.umd.min.js?v={{ static_v() }}" nonce="{{ csp_nonce }}"></script>
 </head>
 <body>
+  {% from "_icons.html" import icon %}
   {#
-    Una sola lista di voci per due navigazioni: barra laterale su desktop,
-    barra in basso su telefono. `primary` marca le cinque voci che entrano
-    nella barra mobile; le altre stanno nel pannello "Altro".
+    Una sola struttura per tre navigazioni: barra laterale, barra in basso su
+    telefono, foglio "Altro". I gruppi esistono perché quattordici voci in fila
+    non sono un menu, sono un elenco: l'utente deve poter capire dov'è una cosa
+    prima di cercarla.
+
+    Le voci di account e amministrazione non stanno qui: vivono nel menu del
+    profilo, in alto a destra. Sono cose che si fanno una volta, non ogni
+    giorno, e occupavano lo stesso spazio delle pagine che si guardano sempre.
   #}
-  {% set items = [
-    ('coach',       '/coach',       '🎯', 'Coach',      true),
-    ('chat',        '/chat',        '💬', 'Coach AI',   true),
-    ('overview',    '/',            '◎',  'Panoramica', true),
-    ('activities',  '/activities',  '🏃', 'Attività',   true),
-    ('goals',       '/goals',       '🏁', 'Obiettivo',  false),
-    ('plan',        '/plan',        '📋', 'Piano',      false),
-    ('sleep',       '/sleep',       '🌙', 'Sonno',      false),
-    ('health',      '/health',      '❤️', 'Salute',     false),
-    ('body',        '/body',        '⚖️', 'Corpo',      false),
-    ('performance', '/performance', '📈', 'Performance', false),
-    ('devices',     '/devices',     '⌚', 'Dispositivi', false),
-    ('ai',          '/ai',          '🤖', 'AI Insights', false),
-    ('settings',    '/settings',    '⚙️', 'Impostazioni', false),
-  ] %}
+  {#
+    Il menu arriva da `app/navigation.py` attraverso un context processor, non
+    è scritto qui: da quando esiste più di un fornitore le voci dipendono da
+    cosa l'utente può davvero avere, e quella è una decisione di prodotto che
+    va letta in Python.
+
+    Chi usa Strava non vede il gruppo «Salute». Non lo vede *vuoto*: non ce
+    l'ha proprio, perché una pagina che si scusa è peggio di una che non c'è.
+  #}
+
+  <a href="#contenuto" class="skip-link">Vai al contenuto</a>
 
   <aside class="sidebar">
-    <div class="logo"><span class="dot"></span> Garmin<b>Coach</b></div>
-    <nav>
-      {% for key, url, icon, label, primary in items %}
-        <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">
-          <span class="nav-icon">{{ icon }}</span><span class="nav-label">{{ label }}</span>
-        </a>
+    <a href="/coach" class="logo">
+      <span class="logo-mark" aria-hidden="true"></span>
+      <span class="logo-text">Garmin<b>Coach</b></span>
+    </a>
+
+    <nav class="sidebar-nav" aria-label="Navigazione principale">
+      {% for group in nav_groups %}
+        <p class="nav-group-label">{{ group.label }}</p>
+        {% for item in group.items %}
+          <a href="{{ item.url }}" class="nav-item {{ 'active' if active == item.key else '' }}"
+             {{ 'aria-current="page"' if active == item.key else '' }}>
+            {{ icon(item.icon) }}<span class="nav-label">{{ item.label }}</span>
+          </a>
+        {% endfor %}
       {% endfor %}
-      {% if user and user.is_admin %}
-        <a href="/admin" class="{{ 'active' if active == 'admin' else '' }}">
-          <span class="nav-icon">🛠</span><span class="nav-label">Amministrazione</span>
-        </a>
-      {% endif %}
     </nav>
+
     <div class="sidebar-foot">
-      <span class="status ok">● Garmin collegato</span>
       <div id="syncStatus" class="sync-status">Ultima sync: —</div>
-      {% if user %}
-      <div class="sidebar-user">
-        <span class="sidebar-user-name">{{ user.display_name or user.garmin_email }}</span>
-        <form method="post" action="/logout"><button type="submit" class="linkbtn">Esci</button></form>
-      </div>
-      {% endif %}
     </div>
   </aside>
 
   <div class="main">
     <header class="topbar">
       <h1>{% block heading %}Dashboard{% endblock %}</h1>
-      <button id="syncBtn" class="btn primary">↻ Sincronizza</button>
+      <div class="topbar-actions">
+        <button id="syncBtn" class="btn" type="button">
+          {{ icon("sync", 16) }}<span>Sincronizza</span>
+        </button>
+        {% if user %}
+        <div class="account">
+          <button type="button" class="account-btn" id="accountBtn"
+                  aria-expanded="false" aria-controls="accountMenu"
+                  aria-label="Account e impostazioni">
+            <span class="account-initials" aria-hidden="true">{{ (user.display_name or user.email)[0] | upper }}</span>
+          </button>
+          <div class="account-menu" id="accountMenu" hidden>
+            <div class="account-head">
+              <span class="account-name">{{ user.display_name or 'Il tuo account' }}</span>
+              <span class="account-mail">{{ user.email }}</span>
+            </div>
+            {% for item in account_items %}
+              <a href="{{ item.url }}" class="{{ 'active' if active == item.key else '' }}">
+                {{ icon(item.icon, 18) }}<span>{{ item.label }}</span>
+              </a>
+            {% endfor %}
+            {% if user.is_admin %}
+              <a href="/admin" class="{{ 'active' if active == 'admin' else '' }}">
+                {{ icon("admin", 18) }}<span>Amministrazione</span>
+              </a>
+            {% endif %}
+            <form method="post" action="/logout" class="account-logout">
+              <button type="submit">{{ icon("logout", 18) }}<span>Esci</span></button>
+            </form>
+          </div>
+        </div>
+        {% endif %}
+      </div>
     </header>
-    <main class="content">
+
+    <main class="content" id="contenuto">
+      {#
+        Lo stato fra la registrazione e il collegamento: l'app non ha ancora
+        niente da leggere. Si dice una volta, in cima, con il posto dove
+        andare — non quindici grafici vuoti.
+      #}
+      {% if needs_connection and active != 'connect' %}
+        <div class="banner">
+          <b>Non hai ancora collegato una sorgente dati.</b>
+          Finché non lo fai non c'è niente da mostrare —
+          <a href="/connect">collega Garmin o Strava</a>.
+        </div>
+      {% endif %}
       {% block content %}{% endblock %}
     </main>
   </div>
 
   {# Navigazione mobile: sempre nel DOM, visibile solo sotto la soglia. #}
-  <nav class="bottom-nav">
-    {% for key, url, icon, label, primary in items if primary %}
-      <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">
-        <span class="nav-icon">{{ icon }}</span><span class="nav-label">{{ label }}</span>
-      </a>
+  <nav class="bottom-nav" aria-label="Navigazione rapida">
+    {% for group in nav_groups %}
+      {% for item in group.items if item.primary %}
+        <a href="{{ item.url }}" class="{{ 'active' if active == item.key else '' }}"
+           {{ 'aria-current="page"' if active == item.key else '' }}>
+          {{ icon(item.icon) }}<span class="nav-label">{{ item.label }}</span>
+        </a>
+      {% endfor %}
     {% endfor %}
     <button type="button" class="bottom-more" id="moreBtn" aria-expanded="false"
             aria-controls="morePanel">
-      <span class="nav-icon">⋯</span><span class="nav-label">Altro</span>
+      {{ icon("more") }}<span class="nav-label">Altro</span>
     </button>
   </nav>
 
+  {#
+    Il foglio "Altro" è un **elenco**, non una griglia di piastrelle.
+
+    Le piastrelle costringono a comprimere il nome in due parole e a leggerlo
+    centrato sotto un'icona: l'occhio deve fermarsi su ognuna per capire cosa
+    sia. Una riga per voce si scorre senza fermarsi — è il motivo per cui tutte
+    le app di questo tipo, Garmin Connect compresa, fanno così.
+  #}
   <div class="more-panel" id="morePanel" hidden>
     <div class="more-sheet">
       <p class="more-title">Tutte le sezioni</p>
-      <div class="more-grid">
-        {% for key, url, icon, label, primary in items if not primary %}
-          <a href="{{ url }}" class="{{ 'active' if active == key else '' }}">
-            <span class="nav-icon">{{ icon }}</span><span class="nav-label">{{ label }}</span>
-          </a>
+
+      {% macro more_row(url, ico, label, key) %}
+        <a href="{{ url }}" class="more-row {{ 'active' if active == key else '' }}">
+          {{ icon(ico, 22) }}
+          <span class="more-row-label">{{ label }}</span>
+          {{ icon("chevron", 18) }}
+        </a>
+      {% endmacro %}
+
+      {% for group in nav_groups %}
+        {# Nel foglio "Altro" finiscono le voci che non stanno nella barra in basso. #}
+        {% set secondary = group.items | rejectattr('primary') | list %}
+        {% if secondary %}
+          <p class="nav-group-label">{{ group.label }}</p>
+          <div class="more-list">
+            {% for item in secondary %}
+              {{ more_row(item.url, item.icon, item.label, item.key) }}
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endfor %}
+
+      <p class="nav-group-label">Account</p>
+      <div class="more-list">
+        {% for item in account_items %}
+          {{ more_row(item.url, item.icon, item.label, item.key) }}
         {% endfor %}
+        {% if user and user.is_admin %}
+          {{ more_row("/admin", "admin", "Amministrazione", "admin") }}
+        {% endif %}
       </div>
+
       {% if user %}
       <form method="post" action="/logout" class="more-logout">
         <button type="submit" class="btn">Esci da {{ user.display_name or 'questo account' }}</button>
@@ -102,8 +187,8 @@
     </div>
   </div>
 
-  <div id="syncToast" class="toast"></div>
-  <script src="/static/app.js?v={{ static_v() }}"></script>
+  <div id="syncToast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js?v={{ static_v() }}" nonce="{{ csp_nonce }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

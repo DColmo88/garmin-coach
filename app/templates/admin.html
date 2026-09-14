@@ -4,11 +4,25 @@
 
 {% block content %}
 
-{% if created_code %}
-  <div class="banner ok">
-    Codice invito creato: <code class="invite-code">{{ created_code }}</code>
+{#
+  L'invito è un **link**, non un codice. Chi lo riceve ci clicca e trova il
+  campo già riempito: un codice nudo lo costringerebbe a capire da solo dove
+  incollarlo, e somiglia troppo a una password per non generare dubbi.
+#}
+{% if created_link %}
+  <div class="banner ok invite-created">
+    <span>Invito creato. Manda questo link:</span>
+    <span class="invite-link-row">
+      <input type="text" class="invite-link" readonly value="{{ created_link }}"
+             onclick="this.select()" />
+      <button type="button" class="btn small copy-link" data-link="{{ created_link }}">
+        Copia
+      </button>
+    </span>
   </div>
 {% endif %}
+{% if ok %}<div class="banner ok">✅ {{ ok }}</div>{% endif %}
+{% if error %}<div class="banner err">⚠️ {{ error }}</div>{% endif %}
 
 <section class="admin-totals">
   <div class="total-card">
@@ -34,7 +48,7 @@
 
 <h2 class="section-title">Utenti</h2>
 <div class="table-wrap">
-  <table class="admin-table">
+  <table class="admin-table table-stack">
     <thead>
       <tr>
         <th>Utente</th>
@@ -49,12 +63,12 @@
     <tbody>
       {% for r in rows %}
       <tr class="{{ 'disabled' if not r.user.is_active else '' }}">
-        <td>
-          <span class="admin-email">{{ r.user.garmin_email }}</span>
+        <td data-label="Utente">
+          <span class="admin-email">{{ r.user.email }}</span>
           {% if r.user.is_admin %}<span class="tag">admin</span>{% endif %}
           {% if not r.user.is_active %}<span class="tag off">disattivato</span>{% endif %}
         </td>
-        <td>
+        <td data-label="Ultima sync">
           {% if r.user.last_sync_at %}
             {{ r.user.last_sync_at.strftime('%d/%m %H:%M') }}
             {% if r.user.sync_failures %}
@@ -62,10 +76,10 @@
             {% endif %}
           {% else %}mai{% endif %}
         </td>
-        <td>{{ r.activities }}</td>
-        <td>{{ r.conversations }}</td>
-        <td>${{ '%.2f' | format(r.usage_30d.cost_usd) }}</td>
-        <td>
+        <td data-label="Attività" class="num">{{ r.activities }}</td>
+        <td data-label="Chat" class="num">{{ r.conversations }}</td>
+        <td data-label="Spesa 30gg" class="num">${{ '%.2f' | format(r.usage_30d.cost_usd) }}</td>
+        <td data-label="Quote">
           <form method="post" action="/admin/users/{{ r.user.id }}/quota" class="quota-form">
             <input type="number" name="chat_daily" value="{{ r.user.ai_quota_chat_daily }}"
                    min="0" title="messaggi chat al giorno" />
@@ -74,7 +88,19 @@
             <button type="submit" class="btn small">Salva</button>
           </form>
         </td>
-        <td>
+        <td data-label="Azioni">
+          {#
+            Il reset della password sta qui perché è il recupero password
+            dell'app: senza SMTP non esiste un «ho dimenticato» via email, e
+            per una cerchia ristretta l'amministratore è la strada più corta.
+          #}
+          <form method="post" action="/admin/users/{{ r.user.id }}/password"
+                class="quota-form"
+                onsubmit="return confirm('Reimposto la password di {{ r.user.email }}?');">
+            <input type="password" name="new_password" required minlength="8"
+                   placeholder="nuova password" autocomplete="new-password" />
+            <button type="submit" class="btn small">Reimposta</button>
+          </form>
           {% if r.user.id != user.id %}
           <form method="post" action="/admin/users/{{ r.user.id }}/toggle">
             <button type="submit" class="linkbtn">
@@ -105,12 +131,25 @@
 <div class="table-wrap">
   <table class="admin-table">
     <thead>
-      <tr><th>Codice</th><th>Stato</th><th>Creato</th></tr>
+      <tr><th>Link</th><th>Stato</th><th>Creato</th></tr>
     </thead>
     <tbody>
       {% for i in invites %}
+      {% set spent = i.used_by_id or (i.expires_at and i.expires_at < now) %}
       <tr>
-        <td><code class="invite-code">{{ i.code }}</code></td>
+        <td data-label="Link">
+          {% if spent %}
+            {# Un invito speso non è un link: è una riga di storia. #}
+            <code class="invite-code">{{ i.code }}</code>
+          {% else %}
+            <span class="invite-link-row">
+              <input type="text" class="invite-link" readonly
+                     value="{{ invite_link(i.code) }}" onclick="this.select()" />
+              <button type="button" class="btn small copy-link"
+                      data-link="{{ invite_link(i.code) }}">Copia</button>
+            </span>
+          {% endif %}
+        </td>
         <td>
           {% if i.used_by_id %}
             usato da {{ used_by.get(i.used_by_id, '—') }}

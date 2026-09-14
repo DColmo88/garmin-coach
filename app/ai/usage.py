@@ -14,6 +14,7 @@ from typing import Literal
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.clock import today_for
 from app.db.models import AIUsageLog, User
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,25 @@ PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
     "gpt-4o": (2.50, 10.00),
 }
 _DEFAULT_PRICE = (1.00, 5.00)
+
+# Il coaching giornaliero dovrebbe costare una chiamata al giorno: la cache lo
+# garantisce finché il giorno è uno solo. Il tetto esiste perché quella
+# garanzia è saltata una volta — `/coach?day=` creava una riga di cache, e
+# quindi tre chiamate al modello, per ogni data digitata — e perché un limite
+# esplicito è più facile da verificare di un invariante implicito. Quattro e
+# non uno: un errore del provider deve poter essere ritentato.
+MAX_COACH_CALLS_DAILY = 4
+
+
+def _today(db: Session, user_id: int) -> date:
+    """Che giorno è per questo utente.
+
+    Le quote si azzerano a mezzanotte, e «mezzanotte» è quella di chi usa
+    l'app. Con il server su UTC e l'atleta a Roma la quota della chat si
+    azzerava alle due del mattino, mentre l'interfaccia prometteva mezzanotte.
+    """
+    user = db.get(User, user_id)
+    return today_for(user) if user is not None else date.today()
 
 
 class QuotaExceeded(Exception):
@@ -62,7 +82,7 @@ def record(
     """Registra una chiamata AI."""
     row = AIUsageLog(
         user_id=user_id,
-        day=date.today(),
+        day=_today(db, user_id),
         kind=kind,
         model=model,
         tokens_in=tokens_in,
@@ -79,13 +99,13 @@ def count_today(db: Session, user_id: int, kind: Kind) -> int:
         select(func.count(AIUsageLog.id)).where(
             AIUsageLog.user_id == user_id,
             AIUsageLog.kind == kind,
-            AIUsageLog.day == date.today(),
+            AIUsageLog.day == _today(db, user_id),
         )
     ) or 0
 
 
 def count_this_month(db: Session, user_id: int, kind: Kind) -> int:
-    first_of_month = date.today().replace(day=1)
+    first_of_month = _today(db, user_id).replace(day=1)
     return db.scalar(
         select(func.count(AIUsageLog.id)).where(
             AIUsageLog.user_id == user_id,
@@ -103,8 +123,9 @@ def check_quota(db: Session, user: User, kind: Kind) -> None:
     elif kind == "plan":
         limit = user.ai_quota_plans_monthly
         used = count_this_month(db, user.id, "plan")
-    else:  # il coaching è una volta al giorno per costruzione (cache)
-        return
+    else:  # coach: la cache ne prevede una al giorno, il tetto la impone
+        limit = MAX_COACH_CALLS_DAILY
+        used = count_today(db, user.id, "coach")
 
     if used >= limit:
         raise QuotaExceeded(kind, used, limit)
@@ -115,7 +136,7 @@ def remaining(db: Session, user: User, kind: Kind) -> int:
         return max(0, user.ai_quota_chat_daily - count_today(db, user.id, "chat"))
     if kind == "plan":
         return max(0, user.ai_quota_plans_monthly - count_this_month(db, user.id, "plan"))
-    return 1
+    return max(0, MAX_COACH_CALLS_DAILY - count_today(db, user.id, "coach"))
 
 
 def estimate_cost(model: str | None, tokens_in: int, tokens_out: int) -> float:

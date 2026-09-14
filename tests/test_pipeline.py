@@ -5,14 +5,24 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from app.db.models import DailyCoachCache, DailyWellness, SleepRecord, TrainingMetric, User
+from app.db.models import (
+    DailyCoachCache,
+    DailyWellness,
+    ProviderConnection,
+    SleepRecord,
+    TrainingMetric,
+    User,
+)
 from app.garmin.client import GarminClientError
 
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
+    db.flush()
+    db.add(ProviderConnection(user_id=u.id, provider="garmin",
+                              external_id="a@x.it", secret_encrypted="cifrato"))
     db.commit()
     return u
 
@@ -71,7 +81,7 @@ def test_refresh_daily_cache_preserves_ai_message(db, user_with_data):
 def test_cache_is_per_user(db, user_with_data):
     from app.pipeline import refresh_daily_cache
 
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
 
@@ -85,7 +95,7 @@ def test_cache_is_per_user(db, user_with_data):
 def test_do_sync_records_success(db, user, monkeypatch):
     from app import pipeline
 
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {"activities": 3})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {"activities": 3})
     result = pipeline.PipelineResult(user_id=user.id)
     pipeline.do_sync(db, user, result)
 
@@ -101,7 +111,7 @@ def test_do_sync_counts_failures(db, user, monkeypatch):
     def boom(d, u):
         raise GarminClientError("Garmin non raggiungibile")
 
-    monkeypatch.setattr(pipeline, "sync_all", boom)
+    monkeypatch.setattr("app.providers.sync_user", boom)
     result = pipeline.PipelineResult(user_id=user.id)
 
     pipeline.do_sync(db, user, result)
@@ -117,7 +127,7 @@ def test_sync_failure_counter_resets_on_success(db, user, monkeypatch):
 
     user.sync_failures = 5
     db.commit()
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {"activities": 1})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {"activities": 1})
     pipeline.do_sync(db, user, pipeline.PipelineResult(user_id=user.id))
     assert user.sync_failures == 0
 
@@ -127,7 +137,7 @@ def test_sync_failure_counter_resets_on_success(db, user, monkeypatch):
 def test_run_for_user_full_pipeline(db, user_with_data, monkeypatch):
     from app import pipeline
 
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {"activities": 2, "sleep": 7})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {"activities": 2, "sleep": 7})
     result = pipeline.run_for_user(db, user_with_data)
 
     assert result.ok
@@ -142,7 +152,7 @@ def test_run_for_user_without_sync(db, user_with_data, monkeypatch):
     def should_not_be_called(d, u):
         raise AssertionError("la sync non doveva partire")
 
-    monkeypatch.setattr(pipeline, "sync_all", should_not_be_called)
+    monkeypatch.setattr("app.providers.sync_user", should_not_be_called)
     result = pipeline.run_for_user(db, user_with_data, with_sync=False)
     assert result.ok and result.synced is None and result.readiness is not None
 
@@ -154,7 +164,7 @@ def test_coaching_runs_even_if_sync_failed(db, user_with_data, monkeypatch):
     def boom(d, u):
         raise GarminClientError("offline")
 
-    monkeypatch.setattr(pipeline, "sync_all", boom)
+    monkeypatch.setattr("app.providers.sync_user", boom)
     result = pipeline.run_for_user(db, user_with_data)
 
     assert not result.ok
@@ -164,14 +174,12 @@ def test_coaching_runs_even_if_sync_failed(db, user_with_data, monkeypatch):
 def test_run_for_all_skips_inactive_users(db, monkeypatch):
     from app import pipeline
 
-    active = User(garmin_email="a@x.it", garmin_password_encrypted="e",
-                  garmin_password_hash="h", is_active=True)
-    inactive = User(garmin_email="b@x.it", garmin_password_encrypted="e",
-                    garmin_password_hash="h", is_active=False)
+    active = User(email="a@x.it", password_hash="h", is_active=True)
+    inactive = User(email="b@x.it", password_hash="h", is_active=False)
     db.add_all([active, inactive])
     db.commit()
 
-    monkeypatch.setattr(pipeline, "sync_all", lambda d, u: {})
+    monkeypatch.setattr("app.providers.sync_user", lambda d, u: {})
     results = pipeline.run_for_all(db)
     assert [r.user_id for r in results] == [active.id]
 
@@ -180,9 +188,13 @@ def test_run_for_all_isolates_failures(db, monkeypatch):
     """Un utente che esplode non deve bloccare gli altri."""
     from app import pipeline
 
-    u1 = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
-    u2 = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u1 = User(email="a@x.it", password_hash="h")
+    u2 = User(email="b@x.it", password_hash="h")
     db.add_all([u1, u2])
+    db.flush()
+    for u in (u1, u2):
+        db.add(ProviderConnection(user_id=u.id, provider="garmin",
+                                  external_id=u.email, secret_encrypted="cifrato"))
     db.commit()
 
     def selective_boom(d, u):
@@ -190,7 +202,7 @@ def test_run_for_all_isolates_failures(db, monkeypatch):
             raise RuntimeError("crash")
         return {"activities": 1}
 
-    monkeypatch.setattr(pipeline, "sync_all", selective_boom)
+    monkeypatch.setattr("app.providers.sync_user", selective_boom)
     results = pipeline.run_for_all(db)
 
     assert len(results) == 2
@@ -230,8 +242,8 @@ def test_scheduler_registers_daily_job(monkeypatch):
 def test_daily_job_processes_every_user(db, monkeypatch, test_db):
     from app import scheduler
 
-    u1 = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
-    u2 = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u1 = User(email="a@x.it", password_hash="h")
+    u2 = User(email="b@x.it", password_hash="h")
     db.add_all([u1, u2])
     db.commit()
 
@@ -258,7 +270,7 @@ def test_activity_id_column_is_64_bit():
 
     from app.db.models import Activity
 
-    column = Activity.__table__.c.garmin_activity_id
+    column = Activity.__table__.c.external_id
     assert isinstance(column.type, BigInteger), (
         "garmin_activity_id deve essere BigInteger: gli id Garmin superano i 2,1 miliardi"
     )
@@ -268,12 +280,12 @@ def test_a_real_garmin_id_fits(db):
     """Un id realistico (oltre 2^31) deve poter essere salvato e riletto."""
     from app.db.models import Activity, User
 
-    user = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    user = User(email="a@x.it", password_hash="h")
     db.add(user)
     db.commit()
 
     big_id = 21_474_836_470  # dieci volte il limite di INTEGER
-    db.add(Activity(user_id=user.id, garmin_activity_id=big_id, activity_type="running"))
+    db.add(Activity(user_id=user.id, external_id=big_id, activity_type="running"))
     db.commit()
 
     from app import queries as q
@@ -298,7 +310,7 @@ def test_sync_failure_rolls_back_before_writing(db, user, monkeypatch):
     def database_error(d, u):
         raise RuntimeError("current transaction is aborted")
 
-    monkeypatch.setattr(pipeline, "sync_all", database_error)
+    monkeypatch.setattr("app.providers.sync_user", database_error)
 
     result = pipeline.PipelineResult(user_id=user.id)
     pipeline.do_sync(db, user, result)
@@ -312,7 +324,7 @@ def test_failure_counter_survives_a_broken_session(db, user, monkeypatch):
     """Anche se registrare il fallimento non riesce, la pipeline non esplode."""
     from app import pipeline
 
-    monkeypatch.setattr(pipeline, "sync_all",
+    monkeypatch.setattr("app.providers.sync_user",
                         lambda d, u: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(db, "commit",
                         lambda: (_ for _ in ()).throw(RuntimeError("sessione rotta")))
@@ -320,3 +332,62 @@ def test_failure_counter_survives_a_broken_session(db, user, monkeypatch):
     result = pipeline.PipelineResult(user_id=user.id)
     pipeline.do_sync(db, user, result)  # non solleva
     assert result.errors
+
+
+# ============================================================================
+# Una chiamata al giorno, anche adesso che l'AI scrive più cose
+# ============================================================================
+
+def test_insights_and_readings_ride_the_daily_call(db, user_with_data, monkeypatch):
+    """Messaggio, insight e letture condividono lo stesso briefing.
+
+    Se ognuno se lo costruisse per conto suo sarebbero tre giri di query per
+    dire le stesse cose a tre destinatari diversi.
+    """
+    from app import pipeline
+
+    visti = []
+    monkeypatch.setattr("app.ai.briefing.build",
+                        lambda d, u, day=None: visti.append(1) or "BRIEFING")
+    monkeypatch.setattr("app.ai.insights.generate_insights",
+                        lambda d, u, briefing=None: ([], "ai"))
+    monkeypatch.setattr("app.ai.readings.generate",
+                        lambda d, u, ctx: {"sleep": {"verdict": "V", "action": "A"}})
+
+    pipeline.refresh_daily_cache(db, user_with_data)
+    assert len(visti) == 1, f"briefing costruito {len(visti)} volte"
+
+
+def test_the_model_is_not_called_twice_in_the_same_day(db, user_with_data, monkeypatch):
+    """Aprire la home dieci volte non deve costare dieci analisi."""
+    from app import pipeline
+
+    chiamate = []
+    monkeypatch.setattr("app.ai.briefing.build", lambda d, u, day=None: "BRIEFING")
+    monkeypatch.setattr("app.ai.readings.generate", lambda d, u, ctx: None)
+    monkeypatch.setattr(
+        "app.ai.insights.generate_insights",
+        lambda d, u, briefing=None: chiamate.append(1) or ([], "ai"),
+    )
+
+    row = pipeline.refresh_daily_cache(db, user_with_data)
+    row.source = "ai"  # come se il coaching AI avesse scritto
+    db.commit()
+
+    pipeline.refresh_daily_cache(db, user_with_data)
+    pipeline.refresh_daily_cache(db, user_with_data)
+
+    assert len(chiamate) == 1
+
+
+def test_the_page_readings_are_stored_for_the_day(db, user_with_data, monkeypatch):
+    from app import pipeline
+
+    monkeypatch.setattr("app.ai.briefing.build", lambda d, u, day=None: "BRIEFING")
+    monkeypatch.setattr("app.ai.insights.generate_insights",
+                        lambda d, u, briefing=None: ([], "ai"))
+    monkeypatch.setattr("app.ai.readings.generate",
+                        lambda d, u, ctx: {"sleep": {"verdict": "Detto bene", "action": "Fai"}})
+
+    row = pipeline.refresh_daily_cache(db, user_with_data)
+    assert row.readings_json["sleep"]["verdict"] == "Detto bene"

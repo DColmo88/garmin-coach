@@ -8,6 +8,38 @@
   <div class="banner ok">✅ Preferenze salvate.</div>
 {% endif %}
 
+{% from "_icons.html" import icon %}
+
+<h2 class="section-title">Come ti alleni</h2>
+<p class="section-hint">
+  Decide cosa l'app ti mette davanti: i primati sulle distanze o quelli su
+  dislivello e velocità. <b>Non filtra niente</b> — il coach e i calcoli
+  continuano a guardare tutti i tuoi sport.
+</p>
+
+<form method="post" action="/settings/sport" class="goal-fields sport-choice">
+  <div class="sport-options">
+    {% for key in primary_sports %}
+      {% set s = sports[key] %}
+      <label class="sport-option">
+        <input type="radio" name="primary_sport" value="{{ key }}"
+               {{ 'checked' if current_sport == key }} />
+        <span class="sport-option-body">
+          {{ icon(s.icon, 26) }}
+          <span class="sport-option-label">{{ s.label }}</span>
+        </span>
+      </label>
+    {% endfor %}
+  </div>
+  {% if suggested_sport and suggested_sport != current_sport %}
+    <p class="field-help">
+      Dai tuoi ultimi mesi sembri più {{ sports[suggested_sport].label | lower }}:
+      è il tuo sport con più ore.
+    </p>
+  {% endif %}
+  <div class="goal-submit"><button type="submit" class="btn primary">Salva</button></div>
+</form>
+
 <form method="post" action="/settings/notifications">
 
   <h2 class="section-title">Come ti raggiungo</h2>
@@ -99,11 +131,78 @@
 </div>
 {% endif %}
 
+{#
+  Le soglie fisiologiche: la premessa di tutto il calcolo del carico. Ogni campo
+  mostra da dove viene il valore in uso, così è chiaro cosa si sta correggendo.
+#}
+<h2 class="section-title">Le tue soglie</h2>
+<p class="section-hint">
+  Servono a trasformare uno sforzo in un numero confrontabile: 150 battiti sono
+  una passeggiata per uno e una gara per un altro. Se le lasci vuote vengono
+  stimate dai tuoi dati, e la pagina <a href="/fitness">Forma</a> lo dichiara.
+</p>
+
+<form method="post" action="/settings/profile" class="goal-fields">
+  <div class="goal-fields-grid">
+    <label class="field">
+      <span>FC massima <small class="field-help">in uso: {{ profile.hr_max }} ({{ profile.source_of('hr_max') }})</small></span>
+      <input type="number" name="hr_max" min="120" max="230" value="{{ user.hr_max or '' }}"
+             placeholder="{{ profile.hr_max }}" />
+    </label>
+    <label class="field">
+      <span>FC a riposo <small class="field-help">in uso: {{ profile.hr_rest }} ({{ profile.source_of('hr_rest') }})</small></span>
+      <input type="number" name="hr_rest" min="25" max="110" value="{{ user.hr_rest or '' }}"
+             placeholder="{{ profile.hr_rest }}" />
+    </label>
+    <label class="field">
+      <span>Soglia anaerobica <small class="field-help">in uso: {{ profile.lthr }} ({{ profile.source_of('lthr') }})</small></span>
+      <input type="number" name="lthr" min="100" max="220" value="{{ user.lthr or '' }}"
+             placeholder="{{ profile.lthr }}" />
+      <small class="field-help">La FC che riesci a tenere per un'ora al massimo.</small>
+    </label>
+    <label class="field">
+      <span>FTP <small class="field-help">watt, solo con misuratore di potenza</small></span>
+      <input type="number" name="ftp" min="50" max="600" value="{{ user.ftp or '' }}" />
+      <small class="field-help">Se c'è, il carico si calcola da qui invece che dalla FC.</small>
+    </label>
+    <label class="field">
+      <span>Anno di nascita</span>
+      <input type="number" name="birth_year" min="1920" max="{{ current_year }}"
+             value="{{ user.birth_year or '' }}" />
+      <small class="field-help">Serve solo a stimare la FC massima se non l'hai mai raggiunta.</small>
+    </label>
+    <label class="field">
+      <span>Sesso</span>
+      <select name="sex">
+        <option value="" {{ 'selected' if not user.sex else '' }}>Non specificato</option>
+        <option value="m" {{ 'selected' if user.sex == 'm' else '' }}>Uomo</option>
+        <option value="f" {{ 'selected' if user.sex == 'f' else '' }}>Donna</option>
+      </select>
+      <small class="field-help">Cambia il coefficiente della formula del carico.</small>
+    </label>
+  </div>
+  <div class="goal-submit">
+    <button type="submit" class="btn primary">Salva le soglie</button>
+  </div>
+</form>
+
 <h2 class="section-title">Account</h2>
 <div class="account-box">
   <div class="account-row">
-    <span class="account-label">Email Garmin</span>
-    <span>{{ user.garmin_email }}</span>
+    <span class="account-label">Email</span>
+    <span>{{ user.email }}</span>
+  </div>
+  <div class="account-row">
+    <span class="account-label">Sorgente dati</span>
+    <span>
+      {% if connection %}
+        {{ connection.provider | capitalize }}
+        {% if connection.status != 'ok' %}<span class="tag off">da ricollegare</span>{% endif %}
+        · <a href="/connect">cambia</a>
+      {% else %}
+        <a href="/connect">nessuna — collegane una</a>
+      {% endif %}
+    </span>
   </div>
   <div class="account-row">
     <span class="account-label">Ultima sincronizzazione</span>
@@ -115,10 +214,61 @@
   </div>
 </div>
 
+<h2 class="section-title">Cambia password</h2>
+<p class="section-hint">
+  È la password <b>dell'app</b>, non quella del tuo orologio. Se la dimentichi
+  la reimposta un amministratore: non c'è un recupero via email.
+</p>
+
+{% if pw_ok %}<div class="banner ok">✅ Password aggiornata.</div>{% endif %}
+{% if pw_error %}<div class="banner err">⚠️ {{ pw_error }}</div>{% endif %}
+
+<form method="post" action="/settings/password" class="goal-fields">
+  <div class="goal-fields-grid">
+    <label class="field">
+      <span>Password attuale</span>
+      <input type="password" name="current_password" required autocomplete="current-password" />
+    </label>
+    <label class="field">
+      <span>Nuova password</span>
+      <input type="password" name="new_password" required autocomplete="new-password"
+             minlength="{{ min_password }}" />
+      <small class="field-help">Almeno {{ min_password }} caratteri.</small>
+    </label>
+    <label class="field">
+      <span>Ripeti la nuova</span>
+      <input type="password" name="new_password_confirm" required autocomplete="new-password"
+             minlength="{{ min_password }}" />
+    </label>
+  </div>
+  <div class="goal-submit"><button type="submit" class="btn primary">Cambia password</button></div>
+</form>
+
+<h2 class="section-title">Cancella l'account</h2>
+<p class="section-hint">
+  Spariscono l'account e <b>tutti i dati</b>: allenamenti, sonno, recupero,
+  peso, obiettivi, piani e conversazioni col coach. Se hai collegato Strava,
+  l'autorizzazione viene revocata. Non si torna indietro e non c'è una copia.
+</p>
+
+<form method="post" action="/settings/delete-account" class="goal-fields">
+  <div class="goal-fields-grid">
+    <label class="field">
+      <span>Riscrivi il tuo indirizzo email per confermare</span>
+      <input type="email" name="confirm_email" required autocomplete="off"
+             placeholder="{{ user.email }}" />
+      <small class="field-help">Deve corrispondere a {{ user.email }}.</small>
+    </label>
+  </div>
+  <div class="goal-submit">
+    <button type="submit" class="btn danger">Cancella account e dati</button>
+  </div>
+</form>
+
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
   const VAPID_PUBLIC_KEY = "{{ vapid_public_key }}";
 
   // La chiave VAPID viaggia in base64url ma l'API push vuole un Uint8Array.

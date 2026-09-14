@@ -61,7 +61,7 @@ class PlanProvider(AIProvider):
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
     db.commit()
     return u
@@ -290,7 +290,7 @@ def test_plans_are_isolated_between_users(db, with_goal, monkeypatch):
     use_provider(monkeypatch, PlanProvider())
     training.generate_plan(db, with_goal)
 
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
     assert training.get_active_plan(db, other.id) is None
@@ -336,3 +336,167 @@ def test_plan_can_be_archived(logged_client, test_db, monkeypatch):
     logged_client.post("/plan/archive")
 
     assert "Non hai un piano attivo" in logged_client.get("/plan").text
+
+
+# ============================================================================
+# Il piano arriva sulla home
+# ============================================================================
+# Chi segue un programma ha già una risposta per oggi. Mostrargli accanto il
+# consiglio generico dell'AI significherebbe dargli due indicazioni diverse
+# per la stessa giornata, e la seconda ignora il piano che sta seguendo.
+
+def _activate_plan(test_db, user_id: int, days=None) -> None:
+    """Mette un piano attivo che parte oggi, con i giorni che servono."""
+    from datetime import date
+
+    from app.db.models import TrainingPlan
+
+    payload = make_plan_json()
+    if days is not None:
+        payload["weeks"][0]["days"] = days
+
+    session = test_db()
+    session.add(TrainingPlan(
+        user_id=user_id, weeks_total=len(payload["weeks"]),
+        plan_json=payload, start_date=date.today(), active=True,
+    ))
+    session.commit()
+    session.close()
+
+
+def _today_named(kind: str, detail: str, note: str = "") -> list[dict]:
+    """Una settimana in cui *oggi* è la sessione voluta."""
+    from datetime import date
+
+    from app.training import WEEKDAYS
+
+    today_name = WEEKDAYS[date.today().weekday()]
+    return [
+        {"weekday": d, "type": kind if d == today_name else "riposo",
+         "detail": detail if d == today_name else "Riposo",
+         "note": note if d == today_name else ""}
+        for d in WEEKDAYS
+    ]
+
+
+def test_without_a_plan_the_home_keeps_the_generic_advice(logged_client):
+    body = logged_client.get("/coach").text
+
+    assert "Allenamento suggerito" in body
+    assert "Oggi dal tuo piano" not in body
+
+
+def test_with_a_plan_the_home_shows_todays_session(logged_client, logged_user, test_db):
+    _activate_plan(test_db, logged_user.id, days=_today_named("facile", "8 km facili"))
+
+    body = logged_client.get("/coach").text
+
+    assert "Oggi dal tuo piano" in body
+    assert "8 km facili" in body
+    # E non il consiglio generico: sarebbero due risposte per la stessa domanda.
+    assert "Allenamento suggerito" not in body
+
+
+def test_the_session_note_is_carried_over(logged_client, logged_user, test_db):
+    _activate_plan(test_db, logged_user.id,
+                   days=_today_named("intervalli", "6×800m", note="Recupero 2 minuti"))
+
+    body = logged_client.get("/coach").text
+
+    assert "6×800m" in body
+    assert "Recupero 2 minuti" in body
+
+
+def test_the_home_says_which_week_it_is(logged_client, logged_user, test_db):
+    _activate_plan(test_db, logged_user.id, days=_today_named("facile", "8 km facili"))
+
+    assert "Settimana 1" in logged_client.get("/coach").text
+
+
+def test_a_day_the_plan_leaves_empty_does_not_fall_back(logged_client, logged_user, test_db):
+    """Se il piano non prevede niente, lo dice: non rimpiazza con altro."""
+    _activate_plan(test_db, logged_user.id, days=[])
+
+    body = logged_client.get("/coach").text
+
+    assert "Il piano non prevede niente per oggi" in body
+    assert "Allenamento suggerito" not in body
+
+
+def test_the_home_links_to_the_week(logged_client, logged_user, test_db):
+    _activate_plan(test_db, logged_user.id, days=_today_named("facile", "8 km facili"))
+
+    assert "Vedi la settimana" in logged_client.get("/coach").text
+
+
+def test_an_archived_plan_gives_the_generic_advice_back(logged_client, logged_user, test_db):
+    from app import training
+
+    _activate_plan(test_db, logged_user.id, days=_today_named("facile", "8 km facili"))
+    session = test_db()
+    training.archive_plan(session, logged_user.id)
+    session.close()
+
+    body = logged_client.get("/coach").text
+
+    assert "Allenamento suggerito" in body
+    assert "Oggi dal tuo piano" not in body
+
+
+def test_a_softened_session_says_so_on_the_home(logged_client, logged_user, test_db, monkeypatch):
+    """L'adattamento va detto, non applicato di nascosto.
+
+    Chi segue un piano si accorge che oggi c'è scritto altro rispetto al
+    programma, e la prima domanda è «perché».
+    """
+    from app.ai.readiness import ReadinessResult
+
+    _activate_plan(test_db, logged_user.id,
+                   days=_today_named("intervalli", "6×800m", note="Recupero 2 minuti"))
+
+    # Prontezza bassa ma non bassissima: la sessione dura resta, ammorbidita.
+    monkeypatch.setattr(
+        "app.routers.pages.compute_readiness",
+        lambda snap: ReadinessResult(42, "Basso", "🟠", "Vacci piano.", []),
+    )
+
+    body = logged_client.get("/coach").text
+
+    assert "Oggi dal tuo piano" in body
+    assert "facile al posto della sessione dura" in body
+    assert "Prontezza a 42" in body
+    assert "6×800m" not in body, "la sessione originale non è più il consiglio di oggi"
+
+
+def test_a_very_low_readiness_turns_it_into_rest(logged_client, logged_user, test_db, monkeypatch):
+    from app.ai.readiness import ReadinessResult
+
+    _activate_plan(test_db, logged_user.id,
+                   days=_today_named("intervalli", "6×800m", note="Recupero 2 minuti"))
+
+    monkeypatch.setattr(
+        "app.routers.pages.compute_readiness",
+        lambda snap: ReadinessResult(28, "Molto basso", "🔴", "Riposa.", []),
+    )
+
+    body = logged_client.get("/coach").text
+
+    assert "Riposo" in body
+    assert "la sposti a domani" in body
+
+
+def test_an_easy_session_is_never_touched_on_the_home(logged_client, logged_user, test_db, monkeypatch):
+    """Una sessione facile con prontezza bassa resta facile: è già il rimedio."""
+    from app.ai.readiness import ReadinessResult
+
+    _activate_plan(test_db, logged_user.id, days=_today_named("facile", "6 km facili"))
+
+    monkeypatch.setattr(
+        "app.routers.pages.compute_readiness",
+        lambda snap: ReadinessResult(28, "Molto basso", "🔴", "Riposa.", []),
+    )
+
+    body = logged_client.get("/coach").text
+
+    assert "6 km facili" in body
+    assert "la sposti a domani" not in body

@@ -22,20 +22,20 @@
 <div class="card mt">
   <h2>Dettaglio notti</h2>
   {% if rows %}
-  <table>
+  <table class="table-stack">
     <thead><tr><th>Giorno</th><th>Totale</th><th>Profondo</th><th>Leggero</th><th>REM</th><th>Sveglio</th><th>Score</th><th>FC riposo</th><th>SpO₂</th></tr></thead>
     <tbody>
       {% for s in rows %}
       <tr>
-        <td>{{ s.day.strftime('%d/%m') }}</td>
-        <td>{{ s.total_sleep_sec | duration }}</td>
-        <td>{{ s.deep_sleep_sec | duration }}</td>
-        <td>{{ s.light_sleep_sec | duration }}</td>
-        <td>{{ s.rem_sleep_sec | duration }}</td>
-        <td>{{ s.awake_sec | duration }}</td>
-        <td>{{ s.sleep_score | num }}</td>
-        <td>{{ s.resting_hr | num }}</td>
-        <td>{{ s.avg_spo2 | num }}%</td>
+        <td data-label="Giorno">{{ s.day.strftime('%d/%m') }}</td>
+        <td data-label="Totale" class="num">{{ s.total_sleep_sec | duration }}</td>
+        <td data-label="Profondo" class="num">{{ s.deep_sleep_sec | duration }}</td>
+        <td data-label="Leggero" class="num">{{ s.light_sleep_sec | duration }}</td>
+        <td data-label="REM" class="num">{{ s.rem_sleep_sec | duration }}</td>
+        <td data-label="Sveglio" class="num">{{ s.awake_sec | duration }}</td>
+        <td data-label="Score" class="num">{{ s.sleep_score | num }}</td>
+        <td data-label="FC riposo" class="num">{{ s.resting_hr | num }}</td>
+        <td data-label="SpO₂" class="num">{{ s.avg_spo2 | num }}%</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -45,7 +45,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
   const C = {{ chart | tojson }};
   GC.barChart("stagesChart", C.labels, [
     { label: "Profondo", data: C.deep, color: GC.PALETTE.blue },

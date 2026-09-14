@@ -3,13 +3,19 @@ from __future__ import annotations
 
 import logging
 import secrets
+from datetime import date
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.session import require_user
+from app import queries as q
+from app import sports
+from app.analysis import cache as analysis_cache
+from app.auth import service as auth_service
+from app.auth.session import require_user, set_session_cookie
+from app.clock import today_for
 from app.config import settings as config
 from app.db.database import get_session
 from app.db.models import NotificationLog, PushSubscription, User
@@ -45,6 +51,8 @@ def settings_page(
     db: Session = Depends(get_session),
     user: User = Depends(require_user),
     saved: str = "",
+    pw_ok: str = "",
+    pw_error: str = "",
 ):
     event_prefs = (user.notify_prefs_json or {}).get("events") or rules.default_prefs()
     recent = list(db.scalars(
@@ -60,16 +68,151 @@ def settings_page(
             "request": request,
             "active": "settings",
             "user": user,
-            "garmin_configured": True,
+            "garmin_configured": user.connection is not None,
+            "connection": user.connection,
+            "pw_ok": pw_ok,
+            "pw_error": pw_error,
+            "min_password": auth_service.MIN_PASSWORD_LENGTH,
             "event_types": rules.EVENT_TYPES,
             "event_prefs": event_prefs,
             "channels": _channel_state(db, user),
+            # Il profilo risolto serve a mostrare, accanto a ogni campo vuoto,
+            # quale valore l'app sta usando al suo posto e da dove viene.
+            "profile": analysis_cache.profile(db, user),
+            "current_year": today_for(user).year,
+            "sports": sports.SPORTS,
+            "primary_sports": sports.PRIMARY_SPORTS,
+            "current_sport": sports.primary_sport(user),
+            # Se lo storico dice il contrario di quello che l'utente ha scelto,
+            # glielo si fa notare invece di lasciarlo con una vista sbagliata.
+            "suggested_sport": sports.infer_primary_sport(
+                q.recent_activities(db, user.id, 100)
+            ),
             "vapid_public_key": config.VAPID_PUBLIC_KEY,
             "telegram_bot": config.TELEGRAM_BOT_TOKEN.split(":")[0] if config.TELEGRAM_BOT_TOKEN else "",
             "recent": recent,
             "saved": bool(saved),
         },
     )
+
+
+# --------------------------- profilo fisiologico ---------------------------
+
+# Intervalli plausibili: fuori da questi il valore è un errore di battitura, e
+# un errore di battitura qui falsa ogni carico calcolato da qui in avanti.
+PROFILE_RANGES = {
+    "hr_max": (120, 230),
+    "hr_rest": (25, 110),
+    "lthr": (100, 220),
+    "ftp": (50, 600),
+    "birth_year": (1920, date.today().year),
+}
+
+
+def _clean_int(raw: str, field: str) -> int | None:
+    """Un intero dentro il suo intervallo, oppure `None` (campo lasciato vuoto)."""
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        number = int(value)
+    except ValueError:
+        return None
+    low, high = PROFILE_RANGES[field]
+    return number if low <= number <= high else None
+
+
+@router.post("/settings/sport")
+async def save_primary_sport(
+    request: Request,
+    db: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Cambia lo sport principale. Un valore non previsto lascia le cose com'erano."""
+    form = await request.form()
+    choice = str(form.get("primary_sport") or "").strip().lower()
+    if choice in sports.PRIMARY_SPORTS:
+        user.primary_sport = choice
+        db.commit()
+    return RedirectResponse("/settings?saved=1", status_code=303)
+
+
+@router.post("/settings/password")
+def change_password(
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    new_password_confirm: str = Form(""),
+    db: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Cambio password. Serve conoscere quella attuale."""
+    from app.auth import service
+
+    if new_password != new_password_confirm:
+        return RedirectResponse("/settings?pw_error=Le due password non coincidono.",
+                                status_code=303)
+    try:
+        service.change_password(db, user, current_password, new_password)
+    except service.InvalidCredentials:
+        return RedirectResponse("/settings?pw_error=La password attuale non è corretta.",
+                                status_code=303)
+    except service.WeakPassword as exc:
+        return RedirectResponse(f"/settings?pw_error={exc}", status_code=303)
+
+    # Il cambio password invalida tutte le sessioni, compresa questa. Chi ha
+    # appena digitato la password vecchia ha dimostrato di essere lui, quindi
+    # gli si riconsegna un cookie nuovo: a restare fuori sono gli altri
+    # dispositivi, che è il punto.
+    response = RedirectResponse("/settings?pw_ok=1", status_code=303)
+    set_session_cookie(response, user)
+    return response
+
+
+@router.post("/settings/delete-account")
+def delete_account(
+    confirm_email: str = Form(""),
+    db: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Cancella il proprio account e tutti i dati. Irreversibile.
+
+    Serve riscrivere la propria email: qui dentro ci sono anni di sonno, HRV,
+    frequenza a riposo e peso, ed è la categoria di dati per cui poterseli
+    portare via da soli non è una cortesia.
+    """
+    from app.auth import service
+    from app.auth.session import SESSION_COOKIE
+
+    try:
+        service.delete_own_account(db, user, confirm_email)
+    except service.ConfirmationMismatch:
+        return RedirectResponse(
+            "/settings?pw_error=Per cancellare l'account riscrivi il tuo indirizzo email.",
+            status_code=303,
+        )
+
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
+@router.post("/settings/profile")
+async def save_profile(
+    request: Request,
+    db: Session = Depends(get_session),
+    user: User = Depends(require_user),
+):
+    """Salva le soglie fisiologiche. Un campo vuoto torna alla stima automatica."""
+    form = await request.form()
+
+    for field in PROFILE_RANGES:
+        setattr(user, field, _clean_int(str(form.get(field) or ""), field))
+
+    sex = str(form.get("sex") or "").strip().lower()
+    user.sex = sex if sex in {"m", "f"} else None
+
+    db.commit()
+    return RedirectResponse("/settings?saved=1", status_code=303)
 
 
 @router.post("/settings/notifications")

@@ -16,10 +16,15 @@ def cli(monkeypatch, test_db):
     return cli_module
 
 
-def test_create_invite_persists_code(cli, test_db):
+def test_create_invite_returns_a_ready_to_send_link(cli, test_db):
+    """Non il codice nudo: chi lo riceve dovrebbe capire dove incollarlo."""
     from app.db.models import InviteCode
 
-    code = cli.create_invite()
+    link = cli.create_invite()
+
+    assert "/register?invite=" in link
+    code = link.split("invite=")[1]
+
     session = test_db()
     invite = session.query(InviteCode).filter_by(code=code).one()
     assert invite.used_by_id is None and invite.expires_at is None
@@ -29,7 +34,7 @@ def test_create_invite_persists_code(cli, test_db):
 def test_create_invite_with_expiry(cli, test_db):
     from app.db.models import InviteCode
 
-    code = cli.create_invite(expires_days=7)
+    code = cli.create_invite(expires_days=7).split("invite=")[1]
     session = test_db()
     invite = session.query(InviteCode).filter_by(code=code).one()
     assert invite.expires_at is not None and invite.expires_at > datetime.utcnow()
@@ -48,8 +53,7 @@ def test_list_users_shows_registered(cli, test_db):
     from app.db.models import User
 
     session = test_db()
-    session.add(User(garmin_email="a@x.it", garmin_password_encrypted="e",
-                     garmin_password_hash="h", is_admin=True))
+    session.add(User(email="a@x.it", password_hash="h", is_admin=True))
     session.commit()
     session.close()
 
@@ -62,8 +66,7 @@ def test_set_admin(cli, test_db):
     from app.db.models import User
 
     session = test_db()
-    session.add(User(garmin_email="a@x.it", garmin_password_encrypted="e",
-                     garmin_password_hash="h"))
+    session.add(User(email="a@x.it", password_hash="h"))
     session.commit()
     session.close()
 

@@ -7,7 +7,7 @@ sbaglio il database sbagliato.
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 
 from app.config import settings
 from app.db import models  # noqa: F401 — l'import registra i modelli su Base
@@ -40,6 +40,26 @@ def run_migrations_online() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+    # SQLite non sa alterare una chiave esterna: Alembic ricrea la tabella da
+    # capo (`render_as_batch`), il che vuol dire lasciarne cadere una che altre
+    # referenziano. Con il controllo delle chiavi acceso — e dalla v3 lo è, per
+    # far valere `ON DELETE CASCADE` anche in sviluppo — quella `DROP TABLE`
+    # fallirebbe. Si spegne per la durata della migrazione.
+    #
+    # Va spento **alla connessione** e non con una query dopo: `exec_driver_sql`
+    # su una connessione appena aperta apre anche una transazione che Alembic
+    # non sa di avere, e a fine migrazione nessuno la chiude. Il risultato è
+    # una migrazione che scrive le tabelle e non scrive `alembic_version`.
+    # Questo ascoltatore gira dopo quello di `app.db.database`, che lo accende,
+    # perché è registrato dopo.
+    @event.listens_for(connectable, "connect")
+    def _relax_sqlite_foreign_keys(dbapi_connection, _record):
+        if connectable.dialect.name != "sqlite":
+            return
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=OFF")
+        cursor.close()
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection,

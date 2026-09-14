@@ -3,6 +3,7 @@ uvicorn[standard]==0.34.0
 jinja2==3.1.5
 python-multipart==0.0.20
 garminconnect==0.2.25
+stravalib==2.5.0
 SQLAlchemy==2.0.36
 python-dotenv==1.0.1
 pytest==8.3.4

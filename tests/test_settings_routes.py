@@ -10,7 +10,7 @@ from app.db.models import NotificationLog, PushSubscription, User
 def current_user(test_db) -> User:
     session = test_db()
     try:
-        return session.scalar(select(User).where(User.garmin_email == "test@x.it"))
+        return session.scalar(select(User).where(User.email == "test@x.it"))
     finally:
         session.close()
 
@@ -185,8 +185,7 @@ def test_push_endpoints_require_login(client):
 
 def test_a_user_cannot_remove_someone_elses_subscription(logged_client, test_db):
     session = test_db()
-    intruder = User(garmin_email="altro@x.it", garmin_password_encrypted="e",
-                    garmin_password_hash="h")
+    intruder = User(email="altro@x.it", password_hash="h")
     session.add(intruder)
     session.commit()
     session.add(PushSubscription(user_id=intruder.id, endpoint=SUBSCRIPTION["endpoint"],
@@ -214,7 +213,7 @@ def test_telegram_link_returns_a_stable_code(logged_client):
 
 def test_telegram_unlink_clears_the_chat_id(logged_client, test_db):
     session = test_db()
-    user = session.scalar(select(User).where(User.garmin_email == "test@x.it"))
+    user = session.scalar(select(User).where(User.email == "test@x.it"))
     user.telegram_chat_id = "12345"
     session.commit()
     session.close()
@@ -344,3 +343,88 @@ def test_webhook_secret_is_stable_and_not_the_token(monkeypatch):
     assert secret == config.telegram_webhook_secret  # deterministico
     assert len(secret) == 32
     assert "token-finto" not in secret
+
+
+# ============================================================================
+# Cambio password
+# ============================================================================
+
+NEW_PASSWORD = "una-nuova-password"
+
+
+def test_the_page_offers_the_password_change(logged_client):
+    body = logged_client.get("/settings").text
+
+    assert 'action="/settings/password"' in body
+    # È la password dell'app, non quella dell'orologio: la pagina lo dice.
+    assert "non quella del tuo orologio" in body
+
+
+def test_the_page_shows_which_source_is_connected(logged_client):
+    body = logged_client.get("/settings").text
+
+    assert "Sorgente dati" in body
+    assert "Garmin" in body
+
+
+def test_the_password_can_be_changed(logged_client, test_db):
+    from app.auth import service
+
+    response = logged_client.post("/settings/password", data={
+        "current_password": "password-di-prova",
+        "new_password": NEW_PASSWORD,
+        "new_password_confirm": NEW_PASSWORD,
+    })
+
+    assert response.status_code == 303
+    session = test_db()
+    try:
+        assert service.login(session, "test@x.it", NEW_PASSWORD)
+    finally:
+        session.close()
+
+
+def test_the_current_password_is_required(logged_client, test_db):
+    from urllib.parse import unquote
+
+    from app.auth import service
+
+    response = logged_client.post("/settings/password", data={
+        "current_password": "non-e-questa",
+        "new_password": NEW_PASSWORD,
+        "new_password_confirm": NEW_PASSWORD,
+    })
+
+    assert "non è corretta" in unquote(response.headers["location"])
+    session = test_db()
+    try:
+        assert service.login(session, "test@x.it", "password-di-prova")
+    finally:
+        session.close()
+
+
+def test_the_two_new_passwords_must_match(logged_client):
+    from urllib.parse import unquote
+
+    response = logged_client.post("/settings/password", data={
+        "current_password": "password-di-prova",
+        "new_password": NEW_PASSWORD,
+        "new_password_confirm": "un-altra-ancora",
+    })
+
+    assert "non coincidono" in unquote(response.headers["location"])
+
+
+def test_a_short_new_password_is_refused(logged_client):
+    from urllib.parse import unquote
+
+    response = logged_client.post("/settings/password", data={
+        "current_password": "password-di-prova",
+        "new_password": "corta", "new_password_confirm": "corta",
+    })
+
+    assert "almeno" in unquote(response.headers["location"])
+
+
+def test_the_password_route_is_protected(client):
+    assert client.post("/settings/password", data={}).status_code == 303

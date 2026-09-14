@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}Sorgente dati · Garmin Coach{% endblock %}
+{% block heading %}Da dove arrivano i tuoi dati{% endblock %}
+
+{% block content %}
+{% from "_icons.html" import icon %}
+
+{% if ok %}<div class="banner ok">✅ {{ ok }}</div>{% endif %}
+{% if error %}<div class="banner err">⚠️ {{ error }}</div>{% endif %}
+
+{% if current %}
+  {# ---------------------------- già collegato ---------------------------- #}
+  <div class="source-current {{ 'broken' if current.status != 'ok' else '' }}">
+    <div class="source-current-head">
+      {{ icon('sync', 22) }}
+      <div>
+        <p class="source-current-title">
+          {{ current_provider.label }} collegato
+          {% if current.external_id %}<span class="muted">· {{ current.external_id }}</span>{% endif %}
+        </p>
+        {% if current.status == 'auth_failed' %}
+          <p class="source-current-note warn">
+            L'accesso non funziona più. Ricollegalo qui sotto per far ripartire la sincronizzazione.
+          </p>
+        {% else %}
+          <p class="source-current-note">{{ current_provider.tagline }}.</p>
+        {% endif %}
+      </div>
+    </div>
+    <form method="post" action="/connect/disconnect"
+          onsubmit="return confirm('Scollego {{ current_provider.label }}? I dati già scaricati restano.');">
+      <button type="submit" class="btn small">Scollega</button>
+    </form>
+  </div>
+
+  <h2 class="section-title">Cambiare sorgente</h2>
+  <p class="section-hint">
+    Puoi collegarne <b>una sola</b>: Strava importa da Garmin, e tenerle
+    entrambe vorrebbe dire contare ogni allenamento due volte.
+    Cambiando non perdi niente di quello che hai già scaricato.
+  </p>
+{% else %}
+  {# ---------------------------- primo collegamento ---------------------------- #}
+  <div class="banner">
+    <b>Manca un passo solo.</b> L'app non ha ancora nessun dato da leggere:
+    scegli qui sotto da dove prenderli.
+  </div>
+{% endif %}
+
+{#
+  La tabella è il punto in cui si dichiara che i due fornitori non danno le
+  stesse cose. È l'unico posto dell'app dove lo si dice, ed è voluto: una
+  differenza spiegata qui è una scelta informata, ripetuta a ogni pagina
+  sarebbe una lamentela.
+#}
+<div class="source-compare">
+  <table class="table-stack compare-table">
+    <thead>
+      <tr>
+        <th>Cosa ottieni</th>
+        <th>{{ icon('sport-run', 16) }} Garmin</th>
+        <th>{{ icon('sport-bike', 16) }} Strava</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% set rows = [
+        ('Allenamenti, distanze, frequenza, potenza', true, true),
+        ('Carico, fitness, fatica e forma', true, true),
+        ('Zone di frequenza cardiaca', true, true),
+        ('Primati personali', true, true),
+        ('Piano, obiettivi, progressi', true, true),
+        ('Sonno', true, false),
+        ('HRV e frequenza a riposo', true, false),
+        ('Peso e composizione corporea', true, false),
+        ('Prontezza giornaliera', true, false),
+        ('VO₂max e training status', true, false),
+      ] %}
+      {% for label, has_garmin, has_strava in rows %}
+      <tr>
+        <td data-label="Cosa ottieni">{{ label }}</td>
+        <td data-label="Garmin" class="cell-mark">{{ '✅' if has_garmin else '—' }}</td>
+        <td data-label="Strava" class="cell-mark">{{ '✅' if has_strava else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <p class="source-why">
+    Strava registra quello che fai con l'orologio, ma <b>non misura niente di
+    notte</b>: il sonno e il recupero non li ha proprio.
+    Se il tuo orologio è un Garmin, collega Garmin — vedi le stesse cose, più il
+    recupero.
+  </p>
+</div>
+
+<div class="source-cards">
+  {# ------------------------------- Garmin ------------------------------- #}
+  <section class="source-card recommended">
+    <header>
+      <span class="source-badge">Consigliato</span>
+      <h3>{{ garmin.label }}</h3>
+      <p class="source-tagline">{{ garmin.tagline }}</p>
+    </header>
+    <form method="post" action="/connect/garmin" class="source-form">
+      <label class="field">
+        <span>Email Garmin</span>
+        <input type="email" name="email" required autocomplete="off"
+               placeholder="tu@esempio.it"
+               value="{{ current.external_id if current and current.provider == 'garmin' else '' }}" />
+      </label>
+      <label class="field">
+        <span>Password Garmin</span>
+        <input type="password" name="password" required autocomplete="off"
+               placeholder="••••••••" />
+      </label>
+      <button type="submit" class="btn primary">
+        {{ 'Ricollega Garmin' if current and current.provider == 'garmin' else 'Collega Garmin' }}
+      </button>
+      <p class="source-note">
+        La password viene <b>cifrata</b> e serve solo a scaricare i tuoi dati ogni
+        notte. L'account non deve avere la verifica in due passaggi attiva.
+      </p>
+    </form>
+  </section>
+
+  {# ------------------------------- Strava ------------------------------- #}
+  <section class="source-card">
+    <header>
+      <h3>{{ strava.label }}</h3>
+      <p class="source-tagline">{{ strava.tagline }}</p>
+    </header>
+    {% if strava_available %}
+      <div class="source-form">
+        <p class="source-note">
+          Ti mandiamo su Strava, autorizzi, e torni qui. Nessuna password da
+          digitare: leggiamo solo le tue attività.
+        </p>
+        <a href="/connect/strava" class="btn primary">
+          {{ 'Riautorizza Strava' if current and current.provider == 'strava' else 'Collega Strava' }}
+        </a>
+        <p class="source-note warn">
+          Le pagine <b>Sonno</b>, <b>Recupero</b> e <b>Corpo</b> spariranno dal menu,
+          e la prontezza giornaliera non verrà calcolata: Strava non ha quei dati.
+        </p>
+      </div>
+    {% else %}
+      <div class="source-form">
+        <p class="source-note">
+          Strava non è configurato su questo server: mancano
+          <code>STRAVA_CLIENT_ID</code> e <code>STRAVA_CLIENT_SECRET</code>.
+        </p>
+      </div>
+    {% endif %}
+  </section>
+</div>
+
+{% if history and current_provider and 'sleep' not in current_provider.capabilities %}
+  <p class="section-hint">
+    Hai dello storico di sonno o recupero da una sorgente precedente: resta
+    consultabile e smette semplicemente di aggiornarsi.
+  </p>
+{% endif %}
+{% endblock %}

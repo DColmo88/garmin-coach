@@ -6,19 +6,23 @@ in Python puro — nessuna chiamata AI, nessun costo, nessuna latenza.
 from app.insights.domains import (
     MetricNote,
     PageReading,
+    hrv_status_label,
     read_activities,
     read_body,
+    read_fitness,
     read_health,
-    read_performance,
     read_sleep,
+    training_status_label,
 )
 
 __all__ = [
     "MetricNote",
     "PageReading",
+    "hrv_status_label",
     "read_activities",
     "read_body",
+    "read_fitness",
     "read_health",
-    "read_performance",
     "read_sleep",
+    "training_status_label",
 ]

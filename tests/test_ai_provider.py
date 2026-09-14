@@ -19,10 +19,28 @@ SNAP = {
     "resting_hr_latest": 50, "vo2max_latest": 52.4,
 }
 
+# Un briefing realistico per misura: quello vero lo costruisce
+# `app.ai.briefing`, che ha i suoi test in `test_briefing.py`.
+BRIEFING = """PROFILO
+FC max 196 (osservata), FC riposo 58 (osservata), soglia 172 (stimata).
+
+OGGI CONTRO IL TUO NORMALE (ultimi 30 giorni)
+Sonno 82 — nella norma — tipico 74-88, mediana 81
+Body Battery 90 — nella norma — tipico 71-92, mediana 84
+
+ANDAMENTO 14 GIORNI (dal più vecchio a oggi, il punto separa le due settimane)
+Sonno          79  84  77  81  85  80  78  ·   82  79  86  80  77  83  82
+
+FORMA E CARICO
+Fitness 42 · Fatica 38 · Forma 4 (in equilibrio)
+
+ULTIMI 3 ALLENAMENTI (il più recente per primo)
+13/08 · running · 10,2 km · 52' a 5:06/km · FC 152/168 · Z2 31' Z3 18'"""
+
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
     db.commit()
     return u
@@ -70,15 +88,51 @@ def test_snapshot_lines_skip_missing_values():
     assert "HRV" not in text and "VO2max" not in text
 
 
-def test_chat_system_prompt_stays_compact():
-    """Il system prompt deve restare piccolo: si paga a ogni messaggio."""
+def test_chat_system_prompt_stays_within_budget():
+    """Il system prompt si paga a ogni messaggio: ha un tetto.
+
+    Il tetto è salito da mille a duemila token quando il contesto è passato dai
+    valori del giorno alle serie di due settimane. È una spesa voluta — senza
+    le serie il modello reagisce a una notte storta come a una crisi — ma resta
+    un tetto: a 2000 token e 30 messaggi al giorno si sta sotto i 5 $ al mese.
+    """
     from app.ai.prompts import chat_system_prompt
 
-    prompt = chat_system_prompt("Davide", SNAP, compute_readiness(SNAP), None, "14/08/2026")
-    # ~4 caratteri per token: sotto i 1000 token
-    assert len(prompt) < 4000, f"system prompt troppo lungo: {len(prompt)} caratteri"
+    prompt = chat_system_prompt("Davide", BRIEFING, compute_readiness(SNAP), None, "14/08/2026")
+
+    # ~3,6 caratteri per token sull'italiano
+    tokens = len(prompt) / 3.6
+    assert tokens < 2000, f"system prompt troppo lungo: ~{tokens:.0f} token"
     assert "Davide" in prompt
     assert "Nessun obiettivo impostato" in prompt
+
+
+def test_the_race_phases_appear_only_with_a_race(db, user):
+    """Trecento token di fasi di preparazione non servono a chi non ha una gara."""
+    from datetime import date, timedelta
+
+    from app import goals
+    from app.ai.prompts import chat_system_prompt
+
+    without = chat_system_prompt("Davide", BRIEFING, compute_readiness(SNAP), None, "14/08/2026")
+    assert "FASI DELLA PREPARAZIONE" not in without
+
+    goal = goals.set_active_goal(
+        db, user, "race_10k", target_date=date.today() + timedelta(days=60),
+        params={"target_time": "50:00"},
+    )
+    with_race = chat_system_prompt("Davide", BRIEFING, compute_readiness(SNAP), goal, "14/08/2026")
+    assert "FASI DELLA PREPARAZIONE" in with_race
+
+
+def test_the_prompt_teaches_how_to_read_a_bad_day():
+    """La regola nata da un errore vero: una notte storta non è un trend."""
+    from app.ai.prompts import chat_system_prompt
+
+    prompt = chat_system_prompt("Davide", BRIEFING, compute_readiness(SNAP), None, "14/08/2026")
+
+    assert "Una giornata storta non è un trend" in prompt
+    assert "da quanti giorni" in prompt
 
 
 def test_chat_system_prompt_includes_goal(db, user):
@@ -89,7 +143,7 @@ def test_chat_system_prompt_includes_goal(db, user):
         db, user, "race_10k", target_date=date.today() + timedelta(days=30),
         params={"target_time": "50:00"},
     )
-    prompt = chat_system_prompt("Davide", SNAP, compute_readiness(SNAP), goal, "14/08/2026")
+    prompt = chat_system_prompt("Davide", BRIEFING, compute_readiness(SNAP), goal, "14/08/2026")
     assert "Gara 10K" in prompt and "50:00" in prompt
 
 
@@ -162,19 +216,35 @@ def test_plan_quota_is_monthly(db, user):
     usage.check_quota(db, user, "plan")
 
 
-def test_coaching_has_no_quota(db, user):
-    """Il coaching è già limitato dalla cache giornaliera."""
+def test_coaching_allows_the_daily_call_and_a_few_retries(db, user):
+    """La cache ne prevede una al giorno; il tetto lascia spazio ai tentativi."""
     from app.ai import usage
 
-    for _ in range(50):
+    for _ in range(usage.MAX_COACH_CALLS_DAILY - 1):
         usage.record(db, user.id, "coach")
     usage.check_quota(db, user, "coach")  # non solleva
+
+
+def test_coaching_has_a_ceiling(db, user):
+    """Oltre il tetto il coaching si ferma, come la chat.
+
+    Prima non ne aveva nessuno: il commento diceva «è già limitato dalla cache
+    giornaliera», e lo era finché il giorno era uno solo. Da quando `/coach`
+    accetta `?day=`, ogni data era una riga di cache nuova e quindi tre
+    chiamate al modello.
+    """
+    from app.ai import usage
+
+    for _ in range(usage.MAX_COACH_CALLS_DAILY):
+        usage.record(db, user.id, "coach")
+    with pytest.raises(usage.QuotaExceeded):
+        usage.check_quota(db, user, "coach")
 
 
 def test_quota_is_per_user(db, user):
     from app.ai import usage
 
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
 
@@ -225,10 +295,11 @@ class CountingProvider(AIProvider):
     def generate_training_plan(self, context, goal):
         return "piano finto"
 
-    def coach(self, snap, readiness, goal=None):
+    def coach(self, snap, readiness, goal=None, briefing=None):
         from app.ai.coaching import build_coach_output
 
         self.calls += 1
+        self.last_briefing = briefing
         out = build_coach_output(snap, readiness, goal)
         out.message = f"Messaggio AI numero {self.calls}"
         out.source = "ai"

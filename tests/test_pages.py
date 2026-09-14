@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-PAGES = ["/", "/coach", "/activities", "/sleep", "/health", "/body", "/performance"]
+PAGES = ["/", "/coach", "/activities", "/sleep", "/health", "/body", "/fitness"]
 
 
 @pytest.fixture(autouse=True)
@@ -25,6 +25,21 @@ def test_page_renders_on_empty_db(logged_client, path):
 
 def test_devices_page_renders(logged_client):
     assert logged_client.get("/devices").status_code == 200
+
+
+# ============================================================================
+# Rotte ritirate
+# ============================================================================
+
+@pytest.mark.parametrize("old,new", [
+    ("/performance", "/fitness"),  # confluita in Forma e carico
+    ("/ai", "/chat"),              # banco di prova della v1, con un bottone morto
+])
+def test_retired_routes_point_at_their_replacement(logged_client, old, new):
+    """Un segnalibro vecchio deve arrivare da qualche parte, non su un 404."""
+    response = logged_client.get(old)
+    assert response.status_code == 301
+    assert response.headers["location"] == new
 
 
 def test_pages_show_logged_user(logged_client):

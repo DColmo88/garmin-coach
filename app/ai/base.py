@@ -89,11 +89,28 @@ class AIProvider(ABC):
         """
         raise NotImplementedError
 
-    def coach(self, snap: dict, readiness, goal=None):  # type: ignore[no-untyped-def]
+    def analyse(
+        self, system: str, user: str, schema: dict[str, Any], heavy: bool = False
+    ) -> dict[str, Any] | None:
+        """Una domanda, una risposta JSON che rispetta `schema`. `None` se non si può.
+
+        Serve a tutto ciò che è «leggi questi dati e dimmi cosa ne pensi, in
+        una forma che so disegnare»: gli insight del giorno, i verdetti delle
+        pagine. Restituire `None` invece di sollevare è voluto — chi chiama ha
+        sempre una versione deterministica da mostrare, e una pagina non deve
+        rompersi perché il modello non ha risposto.
+
+        Il provider deterministico non analizza niente: dice di no e basta.
+        """
+        return None
+
+    def coach(self, snap: dict, readiness, goal=None, briefing: str | None = None):  # type: ignore[no-untyped-def]
         """Coaching del giorno. Default: template deterministici, nessuna rete.
 
         Un provider AI reale fa override per generare prosa con un LLM.
         `goal` è l'obiettivo attivo dell'utente (UserGoal) o None.
+        `briefing` è il quadro delle ultime due settimane (`app.ai.briefing`):
+        serve solo ai provider AI, quello deterministico usa `snap`.
         """
         from app.ai.coaching import build_coach_output
 

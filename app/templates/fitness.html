@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% from "_components.html" import page_reading, notes_for %}
+{% from "_icons.html" import icon %}
+{% block title %}Forma e carico · Garmin Coach{% endblock %}
+{% block heading %}Forma e carico{% endblock %}
+
+{% block content %}
+{{ page_reading(reading) }}
+
+{% if load.has_data %}
+{#
+  I tre numeri del Performance Management Chart. Vanno letti insieme:
+  la forma è la differenza fra le altre due, ed è quella che dice cosa fare oggi.
+#}
+<section class="pmc-hero">
+  <div class="pmc-figure">
+    <span class="pmc-label">Fitness</span>
+    <span class="pmc-value">{{ load.ctl | round | int }}</span>
+    <span class="pmc-note">quanto lavoro il corpo ha assorbito<br>media degli ultimi 42 giorni</span>
+  </div>
+  <div class="pmc-figure">
+    <span class="pmc-label">Fatica</span>
+    <span class="pmc-value">{{ load.atl | round | int }}</span>
+    <span class="pmc-note">quanto deve ancora smaltire<br>media degli ultimi 7 giorni</span>
+  </div>
+  <div class="pmc-figure is-primary tone-{{ load.form_reading[1] }}">
+    <span class="pmc-label">Forma</span>
+    <span class="pmc-value">{{ '%+d' % (load.tsb | round | int) }}</span>
+    <span class="pmc-note">{{ load.form_reading[0] }}</span>
+  </div>
+</section>
+
+<section class="card mt">
+  <div class="card-head">
+    <h2>L'andamento</h2>
+    <p class="card-sub">Le barre sono il carico di ogni giorno. La linea lenta è la
+      fitness, quella veloce la fatica: quando la seconda scende sotto la prima,
+      arriva la forma.</p>
+  </div>
+  <div class="chart-box tall"><canvas id="pmcChart"></canvas></div>
+  {{ notes_for(reading, "pmc") }}
+</section>
+
+<section class="grid-2 mt">
+  <div class="card">
+    <div class="card-head">
+      <h2>Stai salendo troppo in fretta?</h2>
+      <p class="card-sub">Il carico dell'ultima settimana confrontato con la media
+        delle ultime quattro.</p>
+    </div>
+
+    {% if load.acwr is not none %}
+    {% set ratio = load.acwr %}
+    {# La scala arriva a 2,0: oltre, l'indicatore resta appeso al bordo. #}
+    {% set needle = [[ratio / 2 * 100, 98] | min, 2] | max %}
+    <div class="gauge">
+      <div class="gauge-track">
+        <span class="gauge-band low"></span>
+        <span class="gauge-band ok"></span>
+        <span class="gauge-band high"></span>
+        <span class="gauge-band danger"></span>
+        <span class="gauge-needle" style="left: {{ needle | round(1) }}%"></span>
+      </div>
+      <div class="gauge-scale"><span>0,8</span><span>1,3</span><span>1,5</span><span>2,0</span></div>
+      <p class="gauge-value tone-{{ load.acwr_reading[1] }}">
+        <b>{{ '%.2f'|format(ratio) | replace('.', ',') }}</b> — {{ load.acwr_reading[0] }}
+      </p>
+    </div>
+    {% else %}
+    <p class="empty">Per dire se stai salendo troppo in fretta serve un'abitudine
+      rispetto a cui misurare la settimana: almeno otto giorni di allenamento
+      nelle ultime quattro settimane. Con meno, il rapporto direbbe solo che ti
+      sei allenato.</p>
+    {% endif %}
+
+    <ul class="kv mt">
+      <li><span class="k">Carico questa settimana</span><span class="num">{{ load.weekly_load | round | int }}</span></li>
+      <li><span class="k">Settimana precedente</span><span class="num">{{ load.previous_weekly_load | round | int }}</span></li>
+      {% if load.monotony %}
+      <li><span class="k">Monotonia</span><span class="num">{{ '%.1f'|format(load.monotony) | replace('.', ',') }}</span></li>
+      {% endif %}
+    </ul>
+    {{ notes_for(reading, "load") }}
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <h2>Dove passa il tempo</h2>
+      <p class="card-sub">Minuti effettivi per zona di frequenza cardiaca, come li
+        misura l'orologio secondo per secondo.</p>
+    </div>
+
+    {% if load.zones.has_data %}
+    <div class="zone-bar" role="img"
+         aria-label="Distribuzione del tempo nelle cinque zone di frequenza cardiaca">
+      {% for pct in load.zones.percentages %}
+        {% if pct > 0 %}
+        <span class="zone-slice z{{ loop.index }}" style="width: {{ pct }}%"
+              title="Zona {{ loop.index }}: {{ pct | round | int }}%"></span>
+        {% endif %}
+      {% endfor %}
+    </div>
+
+    <table class="zone-table">
+      <thead><tr><th>Zona</th><th>Battiti</th><th>Tempo</th><th>Quota</th></tr></thead>
+      <tbody>
+        {% for z in zones %}
+        <tr>
+          <td><span class="zone-dot z{{ z.n }}"></span>{{ z.name }}</td>
+          <td class="num">{{ boundaries[loop.index0][0] }}–{{ boundaries[loop.index0][1] }}</td>
+          <td class="num">{{ (load.zones.seconds[loop.index0] / 60) | round | int }} min</td>
+          <td class="num">{{ load.zones.percentages[loop.index0] | round | int }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <ul class="metric-notes">
+      <li class="metric-note {{ zone_reading[1] }}">{{ zone_reading[0] }}</li>
+      {# Da dove vengono i confini in battiti. Quando non arrivano
+         dall'orologio sono una derivazione dalla FC massima, e i minuti della
+         tabella sono stati contati con le zone del dispositivo: le due scale
+         possono non coincidere, e va detto invece che lasciarlo indovinare. #}
+      {% if bounds_source != "orologio" %}
+      <li class="metric-note neutral">I battiti qui accanto sono ricavati dalla
+        tua FC massima ({{ load.profile.hr_max }}), mentre i minuti li ha contati
+        l'orologio con le zone che ha impostate: se le hai tarate sulla soglia o
+        sulla riserva cardiaca, le due scale non coincidono.</li>
+      {% endif %}
+    </ul>
+    {% if load.zones.coverage < 0.8 %}
+    <p class="hint">Il dato per zona c'è su {{ load.zones.activities_counted }}
+      allenamenti su {{ load.zones.activities_total }}: il resto arriva alle
+      prossime sincronizzazioni.</p>
+    {% endif %}
+    {% else %}
+    <p class="empty">Il tempo per zona si scarica una attività alla volta.
+      Sincronizza di nuovo fra poco.</p>
+    {% endif %}
+  </div>
+</section>
+{% else %}
+<section class="card">
+  <p class="empty">Non ci sono ancora allenamenti da cui calcolare il carico.
+    Premi Sincronizza per scaricarli.</p>
+</section>
+{% endif %}
+
+<section class="grid-2 mt">
+  <div class="card">
+    <div class="card-head"><h2>VO₂max</h2>
+      <p class="card-sub">La cilindrata del motore aerobico, come la stima Garmin.</p></div>
+    <div class="chart-box"><canvas id="vo2Chart"></canvas></div>
+    {{ notes_for(reading, "vo2max") }}
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>HRV</h2>
+      <p class="card-sub">La variabilità del battito: risponde allo stress prima di
+        qualunque altro parametro.</p></div>
+    <div class="chart-box"><canvas id="hrvChart"></canvas></div>
+    {{ notes_for(reading, "hrv") }}
+  </div>
+</section>
+
+{% if records %}
+<section class="card mt">
+  <div class="card-head">
+    <h2>{{ icon("trophy", 18) }} Primati</h2>
+    <p class="card-sub">Calcolati dai tuoi allenamenti, non dalla lista di Garmin.</p>
+  </div>
+  <div class="record-grid">
+    {% for r in records %}
+    {# Il dettaglio e la data vanno uniti da un separatore solo se ci sono
+       entrambi: un «·» in testa alla riga è il segno che il template non ha
+       controllato. #}
+    {% set meta = [] %}
+    {% if r.detail %}{% set _ = meta.append(r.detail) %}{% endif %}
+    {% if r.day and not r.detail_has_date %}
+      {% set _ = meta.append(r.day.strftime('%d/%m/%Y')) %}
+    {% endif %}
+    <div class="record">
+      <span class="record-label">{{ r.label }}</span>
+      <span class="record-value">{{ r.value }}</span>
+      {% if meta %}<span class="record-detail">{{ meta | join(' · ') }}</span>{% endif %}
+      {% if r.estimated %}<span class="record-flag">tempo riportato dal ritmo medio</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if snapshot and snapshot.race_predictions %}
+<section class="card mt">
+  <div class="card-head">
+    <h2>Previsioni di gara</h2>
+    <p class="card-sub">La stima di Garmin sui tempi che potresti fare adesso.</p>
+  </div>
+  {% set rp = snapshot.race_predictions %}
+  <ul class="kv">
+    <li><span class="k">5 km</span><span class="num">{{ rp.time5K | duration if rp.time5K is defined else '—' }}</span></li>
+    <li><span class="k">10 km</span><span class="num">{{ rp.time10K | duration if rp.time10K is defined else '—' }}</span></li>
+    <li><span class="k">Mezza maratona</span><span class="num">{{ rp.timeHalfMarathon | duration if rp.timeHalfMarathon is defined else '—' }}</span></li>
+    <li><span class="k">Maratona</span><span class="num">{{ rp.timeMarathon | duration if rp.timeMarathon is defined else '—' }}</span></li>
+  </ul>
+</section>
+{% endif %}
+
+{#
+  Le soglie sono la premessa di tutto il resto: se sono stimate, i numeri qui
+  sopra sono stimati anche loro. Meglio dirlo che lasciarlo credere.
+#}
+<section class="card mt thresholds">
+  <div class="card-head">
+    <h2>Su quali soglie sono calcolati questi numeri</h2>
+    <p class="card-sub">Cambiarle in <a href="/settings">Impostazioni</a> cambia tutta
+      la pagina.</p>
+  </div>
+  <div class="threshold-row">
+    <div class="threshold">
+      <span class="threshold-label">FC massima</span>
+      <span class="threshold-value num">{{ load.profile.hr_max }}</span>
+      <span class="threshold-source src-{{ load.profile.source_of('hr_max') }}">{{ load.profile.source_of('hr_max') }}</span>
+    </div>
+    <div class="threshold">
+      <span class="threshold-label">FC a riposo</span>
+      <span class="threshold-value num">{{ load.profile.hr_rest }}</span>
+      <span class="threshold-source src-{{ load.profile.source_of('hr_rest') }}">{{ load.profile.source_of('hr_rest') }}</span>
+    </div>
+    <div class="threshold">
+      <span class="threshold-label">Soglia anaerobica</span>
+      <span class="threshold-value num">{{ load.profile.lthr }}</span>
+      <span class="threshold-source src-{{ load.profile.source_of('lthr') }}">{{ load.profile.source_of('lthr') }}</span>
+    </div>
+    <div class="threshold">
+      <span class="threshold-label">FTP</span>
+      <span class="threshold-value num">{{ load.profile.ftp or '—' }}</span>
+      <span class="threshold-source src-{{ load.profile.source_of('ftp') }}">
+        {{ 'dichiarata' if load.profile.ftp else 'non impostata' }}</span>
+    </div>
+  </div>
+  {% if load.main_source %}
+  <p class="hint">Il carico di ogni seduta è calcolato dalla {{ load.main_source }}.</p>
+  {% endif %}
+</section>
+
+{% if error %}<div class="banner mt">{{ error }}</div>{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+  const C = {{ chart | tojson }};
+
+  if (C.pmc && C.pmc.labels.length) {
+    GC.pmcChart("pmcChart", C.pmc);
+  }
+
+  GC.lineChart("vo2Chart", C.labels, [
+    { label: "Corsa", data: C.vo2max, color: GC.PALETTE.accent },
+    { label: "Bici", data: C.vo2max_cycling, color: GC.PALETTE.blue },
+  ]);
+  GC.lineChart("hrvChart", C.labels, [
+    { label: "HRV", data: C.hrv, color: GC.PALETTE.purple, fill: true },
+  ]);
+</script>
+{% endblock %}

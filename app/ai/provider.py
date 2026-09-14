@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Budget di output: la chat è conversazionale, il piano è un documento.
 _CHAT_MAX_TOKENS = 1500
 _COACH_MAX_TOKENS = 500
+_ANALYSIS_MAX_TOKENS = 900
 _PLAN_MAX_TOKENS = 8000
 
 
@@ -101,7 +102,7 @@ class ClaudeProvider(AIProvider):
 
     # --------------------------- coaching ---------------------------
 
-    def coach(self, snap: dict, readiness, goal=None):  # type: ignore[no-untyped-def]
+    def coach(self, snap: dict, readiness, goal=None, briefing: str | None = None):  # type: ignore[no-untyped-def]
         """Riscrive il messaggio deterministico con un tono da coach.
 
         L'allenamento suggerito resta quello calcolato in Python: l'AI cambia
@@ -113,14 +114,16 @@ class ClaudeProvider(AIProvider):
         if readiness.score is None:
             return base  # senza dati non c'è niente da raccontare
 
-        from app.ai.prompts import coach_system_prompt, coach_user_prompt
+        from app.ai.prompts import coach_system_prompt, coach_user_prompt, snapshot_lines
+
+        context = briefing or snapshot_lines(snap)
 
         try:
             response = self.client.messages.create(
                 model=self.light,
                 max_tokens=_COACH_MAX_TOKENS,
                 system=coach_system_prompt(),
-                messages=[{"role": "user", "content": coach_user_prompt(snap, readiness, goal, base)}],
+                messages=[{"role": "user", "content": coach_user_prompt(context, readiness, goal, base)}],
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Coaching AI fallito, uso il messaggio deterministico: %s", exc)
@@ -220,6 +223,26 @@ class ClaudeProvider(AIProvider):
         )
         yield Finished(tokens_in, tokens_out, self.light, tools_used)
 
+    # --------------------------- analisi ---------------------------
+
+    def analyse(
+        self, system: str, user: str, schema: dict[str, Any], heavy: bool = False
+    ) -> dict[str, Any] | None:
+        try:
+            response = self.client.messages.create(
+                model=self.heavy if heavy else self.light,
+                max_tokens=_ANALYSIS_MAX_TOKENS,
+                system=system,
+                messages=[{"role": "user", "content": user}],
+                output_config={"format": {"type": "json_schema", "schema": schema}},
+            )
+            return json.loads(self._text_of(response))
+        except Exception as exc:  # noqa: BLE001
+            # Chi chiama ha sempre la versione deterministica: si annota e si
+            # tira dritto, non si rompe una pagina per un'analisi mancata.
+            logger.warning("Analisi AI non riuscita: %s", exc)
+            return None
+
     # --------------------------- piani ---------------------------
 
     def generate_training_plan(
@@ -230,7 +253,10 @@ class ClaudeProvider(AIProvider):
         request: dict[str, Any] = {
             "model": self.heavy,
             "max_tokens": _PLAN_MAX_TOKENS,
-            "system": plan_system_prompt(structured=schema is not None),
+            "system": plan_system_prompt(
+                structured=schema is not None,
+                sport=context.get("sport", "running"),
+            ),
             "messages": [{"role": "user", "content": plan_user_prompt(context, goal)}],
         }
         if schema is not None:
@@ -266,11 +292,14 @@ class OpenAIProvider(AIProvider):
         from openai import OpenAI
 
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
-        self.model = settings.OPENAI_MODEL
+        # `OPENAI_MODEL` era il vecchio nome, con un modello solo: se qualcuno
+        # ce l'ha ancora nel .env vale come modello leggero.
+        self.light = settings.OPENAI_MODEL or settings.OPENAI_MODEL_LIGHT
+        self.heavy = settings.OPENAI_MODEL_HEAVY
 
     @property
     def name(self) -> str:
-        return f"openai:{self.model}"
+        return f"openai:{self.light}/{self.heavy}"
 
     @property
     def supports_chat(self) -> bool:
@@ -290,22 +319,47 @@ class OpenAIProvider(AIProvider):
             for t in tools
         ]
 
-    def coach(self, snap: dict, readiness, goal=None):  # type: ignore[no-untyped-def]
+    def analyse(
+        self, system: str, user: str, schema: dict[str, Any], heavy: bool = False
+    ) -> dict[str, Any] | None:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.heavy if heavy else self.light,
+                max_tokens=_ANALYSIS_MAX_TOKENS,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "analisi", "strict": True, "schema": schema},
+                },
+            )
+            return json.loads(response.choices[0].message.content or "{}")
+        except Exception as exc:  # noqa: BLE001
+            # Chi chiama ha sempre la versione deterministica: si annota e si
+            # tira dritto, non si rompe una pagina per un'analisi mancata.
+            logger.warning("Analisi AI non riuscita: %s", exc)
+            return None
+
+    def coach(self, snap: dict, readiness, goal=None, briefing: str | None = None):  # type: ignore[no-untyped-def]
         from app.ai.coaching import build_coach_output
 
         base = build_coach_output(snap, readiness, goal)
         if readiness.score is None:
             return base
 
-        from app.ai.prompts import coach_system_prompt, coach_user_prompt
+        from app.ai.prompts import coach_system_prompt, coach_user_prompt, snapshot_lines
+
+        context = briefing or snapshot_lines(snap)
 
         try:
             response = self.client.chat.completions.create(
-                model=self.model,
+                model=self.light,
                 max_tokens=_COACH_MAX_TOKENS,
                 messages=[
                     {"role": "system", "content": coach_system_prompt()},
-                    {"role": "user", "content": coach_user_prompt(snap, readiness, goal, base)},
+                    {"role": "user", "content": coach_user_prompt(context, readiness, goal, base)},
                 ],
             )
         except Exception as exc:  # noqa: BLE001
@@ -319,7 +373,7 @@ class OpenAIProvider(AIProvider):
             if response.usage:
                 base.tokens_in = response.usage.prompt_tokens
                 base.tokens_out = response.usage.completion_tokens
-            base.model = self.model
+            base.model = self.light
         return base
 
     def chat(
@@ -339,7 +393,7 @@ class OpenAIProvider(AIProvider):
         for _ in range(max_rounds):
             try:
                 response = self.client.chat.completions.create(
-                    model=self.model,
+                    model=self.heavy,
                     max_tokens=_CHAT_MAX_TOKENS,
                     messages=history,
                     tools=tool_defs,
@@ -356,7 +410,7 @@ class OpenAIProvider(AIProvider):
             if not message.tool_calls:
                 if message.content:
                     yield TextChunk(message.content)
-                yield Finished(tokens_in, tokens_out, self.model, tools_used)
+                yield Finished(tokens_in, tokens_out, self.heavy, tools_used)
                 return
 
             history.append(message.model_dump(exclude_none=True))
@@ -382,7 +436,7 @@ class OpenAIProvider(AIProvider):
             "\n\n_(Ho consultato parecchi dati senza arrivare a una conclusione. "
             "Prova a farmi una domanda più circoscritta.)_"
         )
-        yield Finished(tokens_in, tokens_out, self.model, tools_used)
+        yield Finished(tokens_in, tokens_out, self.heavy, tools_used)
 
     def generate_training_plan(
         self, context: dict[str, Any], goal: str, schema: dict[str, Any] | None = None
@@ -390,10 +444,13 @@ class OpenAIProvider(AIProvider):
         from app.ai.prompts import plan_system_prompt, plan_user_prompt
 
         request: dict[str, Any] = {
-            "model": self.model,
+            "model": self.heavy,
             "max_tokens": _PLAN_MAX_TOKENS,
             "messages": [
-                {"role": "system", "content": plan_system_prompt(structured=schema is not None)},
+                {"role": "system", "content": plan_system_prompt(
+                    structured=schema is not None,
+                    sport=context.get("sport", "running"),
+                )},
                 {"role": "user", "content": plan_user_prompt(context, goal)},
             ],
         }

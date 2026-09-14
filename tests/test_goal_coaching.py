@@ -22,7 +22,7 @@ SNAP_TIRED = {
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
     db.commit()
     return u

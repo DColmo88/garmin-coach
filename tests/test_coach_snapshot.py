@@ -9,7 +9,7 @@ from app.queries import coach_snapshot
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
     db.commit()
     return u
@@ -41,7 +41,10 @@ def test_snapshot_computes_latest_and_trends(db, user):
                           hrv_weekly_avg=65, hrv_status="balanced"))
     db.commit()
 
-    snap = coach_snapshot(db, user.id)
+    # `today` è la data dei dati appena inseriti, e va passata: lo snapshot
+    # restituisce i valori di *quel* giorno, non l'ultimo che trova. Senza,
+    # il test verificava sé stesso solo il 1° luglio 2026.
+    snap = coach_snapshot(db, user.id, today)
     assert snap["has_data"] is True
     assert snap["sleep_score"] == 78
     assert snap["resting_hr_latest"] == 60

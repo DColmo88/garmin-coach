@@ -57,9 +57,17 @@ def get_client(user: User) -> Garmin:
         except Exception as exc:  # token assente o scaduto
             logger.info("Token utente %s non riutilizzabile (%s), login completo.", user.id, exc)
 
+        # Le credenziali non stanno più su `users`: dalla v3 l'account dell'app
+        # è indipendente dal fornitore, e Garmin è una connessione fra le altre.
+        conn = getattr(user, "connection", None)
+        if conn is None or conn.provider != "garmin" or not conn.secret_encrypted:
+            raise GarminClientError(
+                f"L'utente {user.id} non ha un account Garmin collegato."
+            )
+
         try:
-            password = decrypt_secret(user.garmin_password_encrypted)
-            client = Garmin(email=user.garmin_email, password=password)
+            password = decrypt_secret(conn.secret_encrypted)
+            client = Garmin(email=conn.external_id, password=password)
             client.login()
             client.garth.dump(tokenstore)
             logger.info("Login Garmin riuscito con credenziali (utente %s).", user.id)
@@ -67,7 +75,7 @@ def get_client(user: User) -> Garmin:
             return client
         except Exception as exc:
             raise GarminClientError(
-                f"Login Garmin fallito per {user.garmin_email}: {exc}"
+                f"Login Garmin fallito per {conn.external_id}: {exc}"
             ) from exc
 
 

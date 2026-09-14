@@ -83,21 +83,23 @@ def _goal_line(goal: UserGoal | None, readiness: ReadinessResult) -> str:
 
 def _message(snap: dict, r: ReadinessResult, goal: UserGoal | None = None) -> str:
     if r.score is None:
-        return ("Non ho ancora abbastanza dati. Premi Sincronizza per scaricare "
-                "le tue metriche Garmin e ricevere il coaching di oggi.")
+        return ("Non ho ancora abbastanza dati. Sincronizza e torna fra un "
+                "paio di giorni per il coaching.")
     parts: list[str] = []
     ss = snap.get("sleep_score")
     if ss is not None:
         parts.append(f"Hai dormito con uno score di {round(ss)}")
-    hrv = snap.get("hrv_status")
+    from app.insights import hrv_status_label
+
+    hrv = hrv_status_label(snap.get("hrv_status"))
     if hrv:
-        parts.append(f"HRV {hrv.lower()}")
+        parts.append(f"HRV {hrv}")
     bb = snap.get("body_battery_high")
     if bb is not None:
         parts.append(f"Body Battery a {round(bb)}")
     detail = ", ".join(parts) if parts else "Ecco il quadro di oggi"
 
-    message = (f"Prontezza {r.score}/100 — {r.emoji} {r.label}. "
+    message = (f"Prontezza {r.score}/100, {r.label.lower()}. "
                f"{detail}. {r.recommendation}.")
     goal_line = _goal_line(goal, r)
     return f"{message} {goal_line}".strip()

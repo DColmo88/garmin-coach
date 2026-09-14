@@ -1,0 +1,17 @@
+{#
+  Il corpo di un messaggio del coach: prosa e schede di allenamento, nell'ordine
+  in cui il modello le ha scritte.
+
+  Sta in un file suo perché lo usano in due: la pagina, quando ricarica la
+  cronologia, e lo streaming, che a fine risposta rimpiazza la bolla col
+  risultato renderizzato qui. Così esiste **una sola** versione della scheda:
+  se stesse anche in JavaScript, prima o poi le due divergerebbero.
+#}
+{% from "_components.html" import workout_card %}
+{% for seg in segments %}
+  {% if seg.kind == 'workout' %}
+    {{ workout_card(seg.workout) }}
+  {% elif seg.text %}
+    <div class="msg-text">{{ seg.text }}</div>
+  {% endif %}
+{% endfor %}

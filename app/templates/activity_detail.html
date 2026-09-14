@@ -26,6 +26,30 @@
     </ul>
   </div>
 </div>
+
+<section class="card mt effort-ask">
+  <p class="checkin-title">Quanto ti è costata?</p>
+  <p class="checkin-hint">
+    Lo sforzo percepito entra nel calcolo del carico: per una seduta senza
+    potenza né frequenza cardiaca è l'unica misura che esista, e per le ripetute
+    corte è più onesta della frequenza media — il cuore arriva in ritardo sullo
+    sforzo.
+  </p>
+  <form method="post" action="/activities/{{ activity.external_id }}/effort" class="effort-row">
+    <span class="effort-scale">
+      {% for n in range(1, 11) %}
+        <button type="submit" name="rpe" value="{{ n }}"
+                class="effort-dot e{{ n }}{% if activity.rpe == n %} chosen{% endif %}"
+                title="{{ n }}/10">{{ n }}</button>
+      {% endfor %}
+    </span>
+  </form>
+  <p class="checkin-ends">
+    1 = passeggiata · 5 = impegnativo ma comodo · 8 = duro · 10 = massimale
+    {% if activity.rpe %} — hai indicato {{ activity.rpe }}/10{% endif %}
+  </p>
+</section>
+
 {% else %}
 <div class="banner mt">Attività non trovata nel database locale. Prova a sincronizzare.</div>
 {% endif %}
@@ -78,7 +102,7 @@
 
 {% block scripts %}
 {% if detail and detail.hr_zones %}
-<script>
+<script nonce="{{ csp_nonce }}">
   const HR = {{ detail.hr_zones | tojson }};
   const labels = HR.map((z, i) => "Zona " + (z.zoneNumber || (i + 1)));
   const secs = HR.map((z) => Math.round((z.secsInZone || 0) / 60));

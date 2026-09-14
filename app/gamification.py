@@ -16,6 +16,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clock import today_for
 from app.db.models import (
     Activity,
     DailyWellness,
@@ -33,7 +34,18 @@ WINDOW_DAYS = 365
 # --------------------------- punteggi ---------------------------
 
 XP_PER_ACTIVITY = 50
-XP_PER_KM = 1
+# XP per unità di carico, non per chilometro.
+#
+# Coi chilometri, cento di bici valevano cento punti e un fartlek da dieci ne
+# valeva dieci: l'app passa metà del proprio codice a spiegare che i
+# chilometri non descrivono l'allenamento — il TRIMP, le zone, la zona 3 «che
+# costa quanto una seduta dura senza darne lo stimolo» — e poi assegnava i
+# punti al volume grezzo. Adesso la moneta è la stessa che regge tutto il
+# resto, cioè `activity_load`.
+#
+# Il fattore è tarato perché un'ora di soglia (circa 100 di carico) valga
+# quanto valevano 25 km, che è il tipo di uscita che prima ne dava altrettanti.
+XP_PER_LOAD = 0.25
 XP_GOOD_SLEEP = 40          # score ≥ 80
 XP_STEP_GOAL = 25
 XP_ACTIVE_WEEK = 100        # 5+ giorni attivi in una settimana
@@ -201,7 +213,7 @@ def _earned_badges(
 
 def recompute(db: Session, user: User, today: date | None = None) -> GamificationState:
     """Ricalcola tutto dai dati e salva lo stato."""
-    today = today or date.today()
+    today = today or today_for(user)
     since = today - timedelta(days=WINDOW_DAYS)
 
     activities = list(db.scalars(
@@ -219,9 +231,23 @@ def recompute(db: Session, user: User, today: date | None = None) -> Gamificatio
     ).all())
 
     # --- XP ---
+    #
+    # Il carico si calcola con lo stesso motore che alimenta forma, rapporto
+    # acuto/cronico e prontezza: un'app che dice all'atleta che i chilometri
+    # non sono la misura giusta non può poi premiarlo a chilometri.
+    from app.analysis import cache as analysis_cache
+    from app.analysis.load import activity_load
+
+    profile = analysis_cache.profile(db, user, today)
+    earned_load = 0.0
+    for activity in activities:
+        single = activity_load(activity, profile)
+        if single is not None:
+            earned_load += single.value
+
     total_xp = 0
     total_xp += XP_PER_ACTIVITY * len(activities)
-    total_xp += int(XP_PER_KM * sum((a.distance_m or 0) for a in activities) / 1000)
+    total_xp += int(XP_PER_LOAD * earned_load)
     total_xp += XP_GOOD_SLEEP * sum(1 for s in sleeps if (s.sleep_score or 0) >= SLEEP_GOOD_SCORE)
     total_xp += XP_STEP_GOAL * sum(
         1 for w in wellness

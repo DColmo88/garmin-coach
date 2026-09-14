@@ -25,8 +25,8 @@ DAY = date(2026, 8, 1)
 
 @pytest.fixture()
 def two_users(db):
-    alice = User(garmin_email="alice@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
-    bob = User(garmin_email="bob@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    alice = User(email="alice@x.it", password_hash="h")
+    bob = User(email="bob@x.it", password_hash="h")
     db.add_all([alice, bob])
     db.flush()
 
@@ -45,10 +45,10 @@ def two_users(db):
                        hrv_status="unbalanced"),
         BodyComposition(user_id=alice.id, day=DAY, weight_g=70000),
         BodyComposition(user_id=bob.id, day=DAY, weight_g=95000),
-        Activity(user_id=alice.id, garmin_activity_id=1, name="Corsa di Alice",
+        Activity(user_id=alice.id, external_id=1, name="Corsa di Alice",
                  activity_type="running", start_time=datetime(2026, 8, 1, 7, 0),
                  distance_m=10000),
-        Activity(user_id=bob.id, garmin_activity_id=2, name="Corsa di Bob",
+        Activity(user_id=bob.id, external_id=2, name="Corsa di Bob",
                  activity_type="running", start_time=datetime(2026, 8, 1, 18, 0),
                  distance_m=3000),
     ])
@@ -95,8 +95,11 @@ def test_get_activity_does_not_leak_across_users(db, two_users):
 
 def test_coach_snapshot_isolated(db, two_users):
     alice, bob = two_users
-    snap_a = q.coach_snapshot(db, alice.id)
-    snap_b = q.coach_snapshot(db, bob.id)
+    # La data va passata: `coach_snapshot` legge i valori del *giorno chiesto*
+    # e non l'ultimo disponibile, quindi senza questo il test passava solo
+    # finché `DAY` era oggi — cioè per un giorno solo, quello in cui fu scritto.
+    snap_a = q.coach_snapshot(db, alice.id, DAY)
+    snap_b = q.coach_snapshot(db, bob.id, DAY)
     assert snap_a["sleep_score"] == 90 and snap_b["sleep_score"] == 30
     assert snap_a["vo2max_latest"] == 58 and snap_b["vo2max_latest"] == 35
     assert snap_a["hrv_status"] == "balanced" and snap_b["hrv_status"] == "unbalanced"
@@ -162,10 +165,34 @@ def test_session_factory_points_at_the_test_database(test_db):
 
     real_url = "data/garmin_connector.db"
     for module, name in (
+        # L'engine e non solo le sessioni: `init_db()` fa `create_all` su
+        # `engine`, e la CLI lo chiama in quasi tutti i comandi. Reindirizzare
+        # solo `SessionLocal` lasciava quella strada aperta, e la suite ha
+        # davvero creato una tabella nuova dentro il database di sviluppo.
+        (database, "engine"),
         (database, "SessionLocal"),
         (chat_router, "SessionLocal"),
         (scheduler, "SessionLocal"),
     ):
-        factory = getattr(module, name)
-        url = str(factory.kw["bind"].url)
+        target = getattr(module, name)
+        bind = target if hasattr(target, "url") else target.kw["bind"]
+        url = str(bind.url)
         assert real_url not in url, f"{module.__name__}.{name} punta al DB reale: {url}"
+
+
+def test_no_test_can_reach_a_real_ai_provider():
+    """Guardia: la suite non deve poter chiamare un modello vero.
+
+    `get_provider()` legge `AI_PROVIDER` dalle impostazioni, che in sviluppo
+    arrivano dal `.env` reale. Senza il blocco in `conftest`, ogni
+    `refresh_daily_cache` chiamava l'API di Anthropic: soldi veri, test
+    dipendenti dalla rete, e fallimenti intermittenti su chi si aspetta il
+    coaching deterministico.
+    """
+    from app.ai.provider import StubProvider, get_provider
+    from app.config import settings
+
+    assert settings.AI_PROVIDER == "stub"
+    assert not settings.ANTHROPIC_API_KEY
+    assert not settings.OPENAI_API_KEY
+    assert isinstance(get_provider(), StubProvider)

@@ -6,7 +6,7 @@
 {% if not garmin_configured %}
 <div class="banner">⚠️ Credenziali Garmin non configurate. Inserisci <b>GARMIN_EMAIL</b> e <b>GARMIN_PASSWORD</b> nel file <code>.env</code>, poi premi <b>Sincronizza</b>.</div>
 {% elif not has_data %}
-<div class="banner info">Nessun dato ancora salvato. Premi <b>↻ Sincronizza</b> in alto a destra per scaricare i tuoi dati da Garmin.</div>
+<div class="banner info">Nessun dato ancora salvato. Premi <b>↻ Sincronizza</b> in alto a destra per scaricare i tuoi dati.</div>
 {% endif %}
 
 <section class="cards">
@@ -17,7 +17,7 @@
   <div class="card stat"><span class="label">VO₂max</span><span class="value">{{ kpis.vo2max | num(1) if kpis.vo2max is not none else '—' }}</span></div>
   <div class="card stat"><span class="label">Training readiness</span><span class="value">{{ kpis.readiness | num if kpis.readiness is not none else '—' }}</span></div>
   <div class="card stat"><span class="label">Stress medio</span><span class="value">{{ kpis.stress | num if kpis.stress is not none else '—' }}</span></div>
-  <div class="card stat"><span class="label">Training status</span><span class="value small">{{ kpis.training_status or '—' }}</span></div>
+  <div class="card stat"><span class="label">Training status</span><span class="value small">{{ kpis.training_status | training_status }}</span></div>
 </section>
 
 <section class="grid-2">
@@ -35,7 +35,7 @@
     <tbody>
       {% for a in activities %}
       <tr>
-        <td><a class="row-link" href="/activities/{{ a.garmin_activity_id }}">{{ a.start_time.strftime('%d/%m %H:%M') if a.start_time else '—' }}</a></td>
+        <td><a class="row-link" href="/activities/{{ a.external_id }}">{{ a.start_time.strftime('%d/%m %H:%M') if a.start_time else '—' }}</a></td>
         <td><span class="tag">{{ a.activity_type or '—' }}</span></td>
         <td>{{ a.distance_m | km }}</td>
         <td>{{ a.duration_sec | duration }}</td>
@@ -49,7 +49,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
   const C = {{ chart | tojson }};
   GC.lineChart("stepsChart", C.labels, [{ label: "Passi", data: C.steps, color: GC.PALETTE.blue, fill: true }], { beginAtZero: true });
   GC.lineChart("rhrChart", C.labels, [{ label: "FC riposo", data: C.resting_hr, color: GC.PALETTE.red }]);

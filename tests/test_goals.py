@@ -11,7 +11,7 @@ from app.db.models import User, UserGoal
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
     db.commit()
     return u
@@ -110,7 +110,7 @@ def test_close_goal_when_none_active(db, user):
 
 
 def test_goals_are_isolated_between_users(db, user):
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
 

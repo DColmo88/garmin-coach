@@ -62,7 +62,13 @@
               🔎 Ha consultato: {{ m.tools_used_json | unique | join(', ') }}
             </div>
           {% endif %}
-          <div class="msg-body">{{ m.content }}</div>
+          <div class="msg-body">
+            {%- if m.role == 'assistant' -%}
+              {% with segments = m.content | chat_segments %}{% include "_chat_message.html" %}{% endwith %}
+            {%- else -%}
+              <div class="msg-text">{{ m.content }}</div>
+            {%- endif -%}
+          </div>
         </div>
       {% endfor %}
     </div>
@@ -82,7 +88,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
   const thread = document.getElementById("thread");
   const composer = document.getElementById("composer");
   const input = document.getElementById("input");
@@ -121,11 +127,17 @@
     el.className = "msg " + role;
     const body = document.createElement("div");
     body.className = "msg-body";
-    body.textContent = text;
+    // Durante lo streaming il testo arriva a pezzi: sta in un nodo di testo,
+    // così i blocchi `allenamento` restano visibili ma innocui. A fine
+    // risposta il server manda l'HTML già renderizzato e lo rimpiazza.
+    const stream = document.createElement("div");
+    stream.className = "msg-text";
+    stream.textContent = text;
+    body.appendChild(stream);
     el.appendChild(body);
     thread.appendChild(el);
     scrollToBottom();
-    return body;
+    return { body, stream };
   }
 
   composer.addEventListener("submit", async (e) => {
@@ -138,7 +150,7 @@
     input.style.height = "auto";
     sendBtn.disabled = true;
 
-    const bubble = addMessage("assistant pending", "");
+    const { body: bubble, stream } = addMessage("assistant pending", "");
     const status = document.createElement("div");
     status.className = "msg-status";
     status.textContent = "Il coach sta pensando…";
@@ -178,7 +190,7 @@
           if (eventName === "chunk") {
             answer += data.text;
             status.remove();
-            bubble.textContent = answer;
+            stream.textContent = answer;
             bubble.parentElement.classList.remove("pending");
             scrollToBottom();
           } else if (eventName === "tool") {
@@ -188,20 +200,23 @@
             conversationField.value = data.conversation_id;
           } else if (eventName === "done") {
             status.remove();
+            // Le schede le disegna il server: qui si sostituisce il testo
+            // grezzo col markup già pronto, senza duplicare il template.
+            if (data.html) bubble.innerHTML = data.html;
             quotaLabel.textContent =
               data.remaining + " messaggi rimasti oggi";
           } else if (eventName === "error") {
             status.remove();
             bubble.parentElement.classList.remove("pending");
             bubble.parentElement.classList.add("error");
-            bubble.textContent = data.message;
+            stream.textContent = data.message;
           }
         }
       }
     } catch (err) {
       status.remove();
       bubble.parentElement.classList.add("error");
-      bubble.textContent = "Errore di rete: " + err.message;
+      stream.textContent = "Errore di rete: " + err.message;
     } finally {
       sendBtn.disabled = false;
       input.focus();

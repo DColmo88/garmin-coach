@@ -16,18 +16,18 @@
 <div class="card mt">
   <h2>Misurazioni</h2>
   {% if rows %}
-  <table>
+  <table class="table-stack">
     <thead><tr><th>Giorno</th><th>Peso</th><th>BMI</th><th>Grasso %</th><th>Acqua %</th><th>Muscolo</th><th>Ossa</th></tr></thead>
     <tbody>
       {% for b in rows %}
       <tr>
-        <td>{{ b.day.strftime('%d/%m/%y') }}</td>
-        <td>{{ b.weight_g | kg }}</td>
-        <td>{{ b.bmi | num(1) }}</td>
-        <td>{{ b.body_fat_pct | num(1) }}</td>
-        <td>{{ b.body_water_pct | num(1) }}</td>
-        <td>{{ b.muscle_mass_g | kg }}</td>
-        <td>{{ b.bone_mass_g | kg }}</td>
+        <td data-label="Giorno">{{ b.day.strftime('%d/%m/%y') }}</td>
+        <td data-label="Peso" class="num">{{ b.weight_g | kg }}</td>
+        <td data-label="BMI" class="num">{{ b.bmi | num(1) }}</td>
+        <td data-label="Grasso %" class="num">{{ b.body_fat_pct | num(1) }}</td>
+        <td data-label="Acqua %" class="num">{{ b.body_water_pct | num(1) }}</td>
+        <td data-label="Muscolo" class="num">{{ b.muscle_mass_g | kg }}</td>
+        <td data-label="Ossa" class="num">{{ b.bone_mass_g | kg }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -37,7 +37,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
   const C = {{ chart | tojson }};
   GC.lineChart("weightChart", C.labels, [{ label: "Peso", data: C.weight, color: GC.PALETTE.blue, fill: true }]);
   GC.lineChart("fatChart", C.labels, [{ label: "Grasso %", data: C.body_fat, color: GC.PALETTE.amber }]);

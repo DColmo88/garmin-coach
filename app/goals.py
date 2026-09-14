@@ -249,9 +249,25 @@ def close_goal(db: Session, user_id: int, outcome: str | None = None) -> UserGoa
 # --------------------------- sintesi per l'AI ---------------------------
 
 def days_to_target(goal: UserGoal, today: date | None = None) -> int | None:
+    """Quanti giorni mancano alla data obiettivo.
+
+    `today` è quello dell'atleta quando il chiamante ce l'ha; senza,
+    ricade sul server. Su un conto alla rovescia una giornata di scarto si
+    vede, ed è la settimana di scarico a decidersi su quel numero.
+    """
     if goal.target_date is None:
         return None
-    return (goal.target_date - (today or date.today())).days
+    return (goal.target_date - (today or _goal_today(goal))).days
+
+
+def _goal_today(goal: UserGoal) -> date:
+    from sqlalchemy.orm import object_session
+
+    from app.clock import today_for
+
+    session = object_session(goal)
+    owner = session.get(User, goal.user_id) if session is not None else None
+    return today_for(owner) if owner is not None else date.today()
 
 
 def describe_goal(goal: UserGoal | None, today: date | None = None) -> str:

@@ -35,12 +35,26 @@ TOOL_LABELS = {
     "get_performance": "le tue metriche di performance",
     "get_body": "la tua composizione corporea",
     "get_goal": "il tuo obiettivo",
+    "get_training_load": "il tuo stato di forma",
+    "get_records": "i tuoi primati",
     "compare_periods": "il confronto fra periodi",
 }
 
 
 def _sse(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def render_message(text: str) -> str:
+    """Il messaggio del coach in HTML: prosa e schede di allenamento.
+
+    Renderizzato dal server anche per lo streaming, così la scheda esiste in un
+    posto solo. La versione a caratteri arriva comunque per prima, mentre il
+    modello scrive: questa la sostituisce alla fine.
+    """
+    from app.ai.workout_card import split
+
+    return templates.get_template("_chat_message.html").render(segments=split(text))
 
 
 @router.get("/chat", response_class=HTMLResponse)
@@ -67,7 +81,7 @@ def chat_page(
             "request": request,
             "active": "chat",
             "user": user,
-            "garmin_configured": True,
+            "garmin_configured": user.connection is not None,
             "conversations": conversations,
             "current": current,
             "messages": messages,
@@ -130,8 +144,10 @@ def chat_send(
                 conversation = chat_service.create_conversation(session, user_id)
             yield _sse("start", {"conversation_id": conversation.id})
 
+            written: list[str] = []
             for event in chat_service.send_message(session, current_user, conversation, text):
                 if isinstance(event, TextChunk):
+                    written.append(event.text)
                     yield _sse("chunk", {"text": event.text})
                 elif isinstance(event, ToolStarted):
                     yield _sse("tool", {
@@ -143,6 +159,9 @@ def chat_send(
                         "conversation_id": conversation.id,
                         "title": conversation.title,
                         "remaining": usage.remaining(session, current_user, "chat"),
+                        # Il testo grezzo è già a schermo; questo lo rimpiazza
+                        # con le schede al posto dei blocchi.
+                        "html": render_message("".join(written).strip()),
                     })
 
         except usage.QuotaExceeded as exc:
@@ -154,14 +173,19 @@ def chat_send(
             })
         except chat_service.ChatUnavailable as exc:
             yield _sse("error", {"message": str(exc)})
-        except AIProviderError as exc:
+        except AIProviderError:
+            # Il testo dell'eccezione arriva dall'SDK del provider e può
+            # contenere identificativi di richiesta, nomi di modello e
+            # frammenti della risposta: nel log serve, a schermo no.
             logger.exception("Provider AI in errore durante la chat")
             yield _sse("error", {
-                "message": f"Il modello non ha risposto: {exc}. Riprova tra poco."
+                "message": "Il modello non ha risposto. Riprova tra poco."
             })
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("Errore imprevisto nella chat")
-            yield _sse("error", {"message": f"Errore imprevisto: {exc}"})
+            yield _sse("error", {
+                "message": "Errore imprevisto. L'ho registrato: riprova fra poco."
+            })
         finally:
             session.close()
 

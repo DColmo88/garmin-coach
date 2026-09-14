@@ -134,7 +134,7 @@ class EmailChannel(Channel):
         return bool(settings.SMTP_HOST and settings.SMTP_FROM)
 
     def is_available_for(self, db: Session, user: User) -> bool:
-        return self.is_configured and bool(user.garmin_email)
+        return self.is_configured and bool(user.email)
 
     def send(self, db: Session, user: User, notification: Notification) -> bool:
         if not self.is_configured:
@@ -143,7 +143,7 @@ class EmailChannel(Channel):
         message = EmailMessage()
         message["Subject"] = f"Garmin Coach · {notification.title}"
         message["From"] = settings.SMTP_FROM
-        message["To"] = user.garmin_email
+        message["To"] = user.email
         link = f"{settings.PUBLIC_BASE_URL}{notification.url}"
         message.set_content(
             f"{notification.title}\n\n{notification.body}\n\n"

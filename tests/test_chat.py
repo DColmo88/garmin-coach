@@ -54,8 +54,8 @@ class NoChatProvider(AIProvider):
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", display_name="Davide",
-             garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", display_name="Davide",
+             password_hash="h")
     db.add(u)
     db.commit()
     return u
@@ -87,7 +87,7 @@ def test_create_and_list(db, user):
 def test_conversations_are_isolated(db, user):
     from app.ai import chat
 
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
 
@@ -114,7 +114,7 @@ def test_delete_conversation_removes_messages(db, user):
 def test_cannot_delete_someone_elses_conversation(db, user):
     from app.ai import chat
 
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
     theirs = chat.create_conversation(db, other.id)
@@ -244,7 +244,39 @@ def test_system_prompt_carries_name_and_state(db, user, monkeypatch):
     drain(chat.send_message(db, user, conversation, "ciao"))
 
     assert "Davide" in provider.received_system
-    assert "STATO DI OGGI" in provider.received_system
+    assert "PROFILO" in provider.received_system
+    assert "PRONTEZZA DI OGGI" in provider.received_system
+
+
+def test_the_system_prompt_carries_the_series_not_just_today(db, user, monkeypatch):
+    """Il modello deve vedere l'andamento, non l'ultimo campione.
+
+    Senza le serie reagiva a una notte storta come a una crisi: è il motivo per
+    cui il briefing ha sostituito lo snapshot puntuale.
+    """
+    from datetime import date, timedelta
+
+    from app.ai import chat
+    from app.db.models import DailyWellness, SleepRecord
+
+    today = date.today()
+    # Dodici notti buone, poi una storta: il caso che prima portava fuori strada.
+    for i in range(13):
+        db.add(SleepRecord(user_id=user.id, day=today - timedelta(days=i),
+                           sleep_score=41 if i == 0 else 82, total_sleep_sec=7 * 3600))
+        db.add(DailyWellness(user_id=user.id, day=today - timedelta(days=i),
+                             resting_hr=56, body_battery_high=88))
+    db.commit()
+
+    provider = ScriptedProvider()
+    use_provider(monkeypatch, provider)
+    conversation = chat.create_conversation(db, user.id)
+    drain(chat.send_message(db, user, conversation, "come sto?"))
+
+    system = provider.received_system
+    assert "ANDAMENTO 14 GIORNI" in system
+    assert "fuori norma da 1 giorno" in system, "manca il segnale che distingue il giorno dal trend"
+    assert "Una giornata storta non è un trend" in system
 
 
 def test_history_is_capped(db, user, monkeypatch):
@@ -375,8 +407,7 @@ def test_cannot_open_another_users_conversation(logged_client, test_db):
     from app.ai import chat
 
     session = test_db()
-    intruder = User(garmin_email="altro@x.it", garmin_password_encrypted="e",
-                    garmin_password_hash="h")
+    intruder = User(email="altro@x.it", password_hash="h")
     session.add(intruder)
     session.commit()
     theirs = chat.create_conversation(session, intruder.id)

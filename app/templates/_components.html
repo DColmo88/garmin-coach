@@ -37,6 +37,63 @@
 {% endif %}
 {% endmacro %}
 
+{#
+  La scheda di un allenamento proposto dal coach.
+
+  Esiste perché un allenamento è una cosa che si guarda mentre si corre: deve
+  avere sempre la stessa forma, e le tre fasi devono essere leggibili in un
+  colpo d'occhio. Il testo attorno spiega il perché; questa dice cosa fare.
+#}
+{% macro workout_card(w) %}
+{% from "_icons.html" import icon %}
+<article class="workout tone-{{ w.tone }}">
+  <header class="workout-head">
+    <span class="workout-icon">{{ icon(w.icon, 22) }}</span>
+    <div class="workout-title">
+      <span class="workout-kind">{{ w.type_label }}{% if w.giorno %} · {{ w.giorno }}{% endif %}</span>
+      <h4>{{ w.titolo }}</h4>
+    </div>
+    {% if w.duration_label %}
+      <span class="workout-duration num">{{ w.duration_label }}</span>
+    {% endif %}
+  </header>
+
+  {% if w.obiettivo %}<p class="workout-goal">{{ w.obiettivo }}</p>{% endif %}
+
+  <div class="workout-steps">
+    {% if w.riscaldamento %}
+    <div class="workout-step">
+      <span class="workout-step-label">Riscaldamento</span>
+      <span class="workout-step-body">{{ w.riscaldamento }}</span>
+    </div>
+    {% endif %}
+
+    {% for b in w.blocchi %}
+    <div class="workout-step is-core">
+      <span class="workout-step-label">{{ 'Lavoro' if loop.first else '' }}</span>
+      <span class="workout-step-body">
+        <b>{{ b.cosa }}</b>
+        {%- if b.durata %} <span class="num">{{ b.durata }}</span>{% endif -%}
+        {%- if b.ritmo %} <span class="num">{{ b.ritmo }}</span>{% endif -%}
+        {%- if b.recupero %} <span class="workout-rec">rec. {{ b.recupero }}</span>{% endif -%}
+      </span>
+    </div>
+    {% endfor %}
+
+    {% if w.defaticamento %}
+    <div class="workout-step">
+      <span class="workout-step-label">Defaticamento</span>
+      <span class="workout-step-body">{{ w.defaticamento }}</span>
+    </div>
+    {% endif %}
+  </div>
+
+  {% if w.zona_fc %}<p class="workout-zone">{{ w.zona_fc }}</p>{% endif %}
+  {% if w.razionale %}<p class="workout-why">{{ w.razionale }}</p>{% endif %}
+  {% if w.note %}<p class="workout-note">{{ w.note }}</p>{% endif %}
+</article>
+{% endmacro %}
+
 {# Le note che si attaccano sotto un grafico specifico. #}
 {% macro notes_for(r, metric) %}
 {% if r %}

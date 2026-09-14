@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_components.html" import page_reading, notes_for %}
-{% block title %}Attività · Garmin Connector{% endblock %}
+{% from "_icons.html" import icon %}
+{% block title %}Attività · Garmin Coach{% endblock %}
 {% block heading %}Attività{% endblock %}
 
 {% block content %}
@@ -19,23 +20,36 @@
   </div>
 </section>
 
+{#
+  Sotto i 760px questa tabella diventa una pila di schede: nove colonne su un
+  telefono non stanno, e schiacciarle o farle scorrere in orizzontale sono due
+  modi diversi di renderle illeggibili. Il `data-label` su ogni cella è quello
+  che permette la trasformazione via CSS, senza duplicare il markup.
+#}
 <div class="card mt">
   <h2>Elenco allenamenti</h2>
   {% if activities %}
-  <table>
-    <thead><tr><th>Data</th><th>Nome</th><th>Tipo</th><th>Distanza</th><th>Durata</th><th>Passo</th><th>FC med/max</th><th>Disl.</th><th>kcal</th></tr></thead>
+  <table class="table-stack">
+    <thead><tr>
+      <th>Data</th><th>Nome</th><th>Sport</th><th>Distanza</th><th>Durata</th>
+      <th>{{ speed_header }}</th><th>FC med/max</th><th>Disl.</th><th>kcal</th>
+    </tr></thead>
     <tbody>
       {% for a in activities %}
       <tr>
-        <td><a class="row-link" href="/activities/{{ a.garmin_activity_id }}">{{ a.start_time.strftime('%d/%m/%y %H:%M') if a.start_time else '—' }}</a></td>
-        <td>{{ a.name or '—' }}</td>
-        <td><span class="tag">{{ a.activity_type or '—' }}</span></td>
-        <td>{{ a.distance_m | km }}</td>
-        <td>{{ a.duration_sec | duration }}</td>
-        <td>{{ a.avg_speed | pace }}</td>
-        <td>{{ a.avg_hr | num }}/{{ a.max_hr | num }}</td>
-        <td>{{ a.elevation_gain_m | num }} m</td>
-        <td>{{ a.calories | num }}</td>
+        <td data-label="Data"><a class="row-link" href="/activities/{{ a.external_id }}">{{ a.start_time.strftime('%d/%m/%y %H:%M') if a.start_time else '—' }}</a></td>
+        <td data-label="Nome">{{ a.name or '—' }}</td>
+        <td data-label="Sport">
+          <span class="sport" title="{{ a | sport_label }}">
+            {{ icon(a | sport_icon, 17) }}<span class="sport-name">{{ a | sport_label }}</span>
+          </span>
+        </td>
+        <td data-label="Distanza" class="num">{{ a.distance_m | km }}</td>
+        <td data-label="Durata" class="num">{{ a.duration_sec | duration }}</td>
+        <td data-label="{{ speed_header }}" class="num">{{ a | sport_speed }}</td>
+        <td data-label="FC med/max" class="num">{{ a.avg_hr | num }}/{{ a.max_hr | num }}</td>
+        <td data-label="Dislivello" class="num">{{ a.elevation_gain_m | num }} m</td>
+        <td data-label="kcal" class="num">{{ a.calories | num }}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -45,7 +59,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ csp_nonce }}">
   const C = {{ chart | tojson }};
   const colors = [GC.PALETTE.blue, GC.PALETTE.green, GC.PALETTE.amber, GC.PALETTE.purple, GC.PALETTE.cyan, GC.PALETTE.pink, GC.PALETTE.red];
   GC.doughnutChart("typeChart", C.type_labels, C.type_counts, colors);

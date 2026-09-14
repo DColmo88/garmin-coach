@@ -18,7 +18,7 @@ from app.db.models import (
 
 @pytest.fixture()
 def user(db) -> User:
-    u = User(garmin_email="a@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    u = User(email="a@x.it", password_hash="h")
     db.add(u)
     db.commit()
     return u
@@ -127,7 +127,7 @@ def test_sleep_reports_hours_and_deep_percentage(db, user):
 
 
 def test_activities_list_with_pace_and_ids(db, user):
-    db.add(Activity(user_id=user.id, garmin_activity_id=555, activity_type="running",
+    db.add(Activity(user_id=user.id, external_id=555, activity_type="running",
                     start_time=datetime.now() - timedelta(days=1),
                     distance_m=10000, duration_sec=3000, avg_hr=150))
     db.commit()
@@ -135,15 +135,30 @@ def test_activities_list_with_pace_and_ids(db, user):
     out = tools.tool_get_activities(db, user.id, {})
     assert "[id 555]" in out
     assert "10.0 km" in out
-    assert "passo 5:00/km" in out
+    assert "5:00/km" in out
+    assert "Corsa" in out, "il codice Garmin non deve arrivare al modello"
     assert "1 allenamenti" in out
+
+
+def test_a_ride_is_listed_in_kmh_not_in_minutes_per_km(db, user):
+    """«100 km a 2:35/km» è giusto e illeggibile, anche per il modello."""
+    db.add(Activity(user_id=user.id, external_id=556, activity_type="cycling",
+                    start_time=datetime.now() - timedelta(days=1),
+                    distance_m=60000, duration_sec=9000, avg_hr=140))
+    db.commit()
+
+    out = tools.tool_get_activities(db, user.id, {})
+
+    assert "24,0 km/h" in out
+    assert "/km" not in out.replace("km/h", "")
+    assert "Bici" in out
 
 
 def test_activities_filter_by_type(db, user):
     now = datetime.now()
-    db.add(Activity(user_id=user.id, garmin_activity_id=1, activity_type="running",
+    db.add(Activity(user_id=user.id, external_id=1, activity_type="running",
                     start_time=now, distance_m=5000, duration_sec=1500))
-    db.add(Activity(user_id=user.id, garmin_activity_id=2, activity_type="cycling",
+    db.add(Activity(user_id=user.id, external_id=2, activity_type="cycling",
                     start_time=now, distance_m=30000, duration_sec=3600))
     db.commit()
 
@@ -152,7 +167,7 @@ def test_activities_filter_by_type(db, user):
 
 
 def test_activity_detail(db, user):
-    db.add(Activity(user_id=user.id, garmin_activity_id=77, name="Lungo domenicale",
+    db.add(Activity(user_id=user.id, external_id=77, name="Lungo domenicale",
                     activity_type="running", start_time=datetime(2026, 8, 2, 8, 0),
                     distance_m=21097, duration_sec=7200, avg_hr=155, max_hr=178,
                     elevation_gain_m=210, calories=1500, aerobic_te=3.8))
@@ -236,11 +251,11 @@ def test_compare_periods_without_data(db, user):
 
 def test_executor_ignores_a_user_id_in_the_arguments(db, user):
     """Anche se il modello passasse user_id, l'esecutore usa il proprio."""
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
 
-    db.add(Activity(user_id=other.id, garmin_activity_id=999, activity_type="running",
+    db.add(Activity(user_id=other.id, external_id=999, activity_type="running",
                     start_time=datetime.now(), distance_m=42195, duration_sec=14400))
     db.commit()
 
@@ -251,10 +266,10 @@ def test_executor_ignores_a_user_id_in_the_arguments(db, user):
 
 
 def test_activity_detail_cannot_cross_users(db, user):
-    other = User(garmin_email="b@x.it", garmin_password_encrypted="e", garmin_password_hash="h")
+    other = User(email="b@x.it", password_hash="h")
     db.add(other)
     db.commit()
-    db.add(Activity(user_id=other.id, garmin_activity_id=999, activity_type="running",
+    db.add(Activity(user_id=other.id, external_id=999, activity_type="running",
                     start_time=datetime.now(), distance_m=10000, duration_sec=3000))
     db.commit()
 

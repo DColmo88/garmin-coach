@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any, Callable
 
 from app.db.models import User
+from app.clock import today_for
 from app.garmin.client import get_client
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ def get_performance_snapshot(user: User) -> dict[str, Any]:
     """Record personali + previsioni di gara + endurance/hill score."""
     def producer():
         c = get_client(user)
-        today = date.today().isoformat()
+        today = today_for(user).isoformat()
         return {
             "personal_records": _safe(c.get_personal_record, []),
             "race_predictions": _safe(c.get_race_predictions, {}),

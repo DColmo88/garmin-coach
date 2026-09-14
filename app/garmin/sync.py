@@ -21,6 +21,7 @@ from app.db.models import (
     TrainingMetric,
     User,
 )
+from app.clock import today_for
 from app.garmin.client import get_client
 
 logger = logging.getLogger(__name__)
@@ -59,9 +60,49 @@ def _parse_dt(value: str | None) -> datetime | None:
     return None
 
 
-def _last_days(days: int) -> list[date]:
-    today = date.today()
+def _last_days(days: int, user: User) -> list[date]:
+    """Gli ultimi `days` giorni, contati dal calendario dell'utente."""
+    today = today_for(user)
     return [today - timedelta(days=i) for i in range(days)]
+
+
+# Quanti giorni recenti si riscaricano comunque, anche se già in archivio.
+# Garmin corregge il sonno e il riepilogo quotidiano per un paio di giorni
+# dopo — l'orologio sincronizza in ritardo, l'utente modifica a mano — quindi
+# le ultime giornate vanno riprese sempre.
+REFRESH_DAYS = 4
+
+
+def _days_to_fetch(db: Session, model, user: User, days: int) -> list[date]:
+    """I giorni da chiedere davvero a Garmin: i mancanti più i più recenti.
+
+    È la differenza fra una sincronizzazione notturna da centosettanta
+    richieste e una da una quindicina.
+
+    La versione precedente riscaricava ventotto giorni per tre endpoint —
+    e `sync_training` ne interroga quattro per giorno, quindi centododici
+    richieste da sole — **ogni notte**, riscrivendo con gli stessi valori righe
+    che erano già in archivio e che non sarebbero più cambiate. Per un'API non
+    documentata e legata a un account personale, il volume è il rischio
+    operativo principale che questa app abbia.
+
+    Cosa si chiede: i giorni che nel database non ci sono, più gli ultimi
+    `REFRESH_DAYS` a prescindere. I secondi perché Garmin li ritocca ancora.
+    """
+    window = _last_days(days, user)
+    oldest = min(window)
+
+    known = set(db.scalars(
+        select(model.day).where(model.user_id == user.id, model.day >= oldest)
+    ).all())
+
+    recent = set(_last_days(REFRESH_DAYS, user))
+    wanted = [d for d in window if d not in known or d in recent]
+    logger.info(
+        "%s: %d giorni da scaricare su %d (%d già in archivio).",
+        model.__tablename__, len(wanted), len(window), len(known),
+    )
+    return wanted
 
 
 def _upsert(db: Session, model, user_id: int, day: date):
@@ -76,9 +117,68 @@ def _upsert(db: Session, model, user_id: int, day: date):
 
 # --------------------------- attività ---------------------------
 
-def sync_activities(db: Session, user: User, limit: int = 50) -> int:
+# Quanto indietro si va la prima volta che si collega un account.
+# Centottanta giorni sono la finestra su cui `app/analysis/` calcola le curve
+# di fitness e fatica: con meno, la curva parte da una stima e i primi
+# quarantadue giorni sono un artefatto. Trecentosessantacinque è quello che
+# Strava scarica al primo collegamento, e le due sorgenti devono partire alla
+# pari.
+FIRST_SYNC_DAYS = 365
+
+# Quante attività per pagina e quante pagine al massimo. Il tetto esiste
+# perché un account con dieci anni di storia non deve poter trasformare il
+# primo collegamento in mille richieste.
+ACTIVITY_PAGE = 50
+MAX_ACTIVITY_PAGES = 10
+
+# Quanti giorni già visti si riprendono a ogni sync: capita di rinominare o
+# correggere un'attività dopo averla caricata.
+ACTIVITY_OVERLAP_DAYS = 3
+
+
+def _activity_horizon(db: Session, user: User) -> date:
+    """Fin dove indietro serve scaricare le attività.
+
+    Al primo collegamento un anno intero; poi soltanto da poco prima
+    dell'ultima già in archivio. Prima si chiedevano sempre e solo le ultime
+    cinquanta e basta: chi collegava Garmin con anni di storia ne otteneva
+    cinquanta — due mesi scarsi per chi si allena spesso — e le curve di
+    fitness partivano da un seme inventato. Chi invece stava due mesi senza
+    aprire l'app perdeva per sempre le attività oltre la cinquantesima.
+    """
+    today = today_for(user)
+    newest = db.scalar(
+        select(Activity.start_time)
+        .where(Activity.user_id == user.id, Activity.source == "garmin")
+        .order_by(Activity.start_time.desc())
+        .limit(1)
+    )
+    if newest is None:
+        return today - timedelta(days=FIRST_SYNC_DAYS)
+    return newest.date() - timedelta(days=ACTIVITY_OVERLAP_DAYS)
+
+
+def _fetch_activities(client, horizon: date) -> list[dict]:
+    """Pagina all'indietro finché non si supera l'orizzonte."""
+    collected: list[dict] = []
+    for page in range(MAX_ACTIVITY_PAGES):
+        batch = client.get_activities(page * ACTIVITY_PAGE, ACTIVITY_PAGE) or []
+        if not batch:
+            break
+        collected.extend(batch)
+
+        oldest = _parse_dt(batch[-1].get("startTimeLocal"))
+        if oldest is None or oldest.date() <= horizon:
+            break
+        if len(batch) < ACTIVITY_PAGE:
+            break
+    return collected
+
+
+def sync_activities(db: Session, user: User, limit: int = ACTIVITY_PAGE) -> int:
     client = get_client(user)
-    activities = client.get_activities(0, limit) or []
+    horizon = _activity_horizon(db, user)
+    activities = _fetch_activities(client, horizon)
     count = 0
 
     for act in activities:
@@ -88,10 +188,10 @@ def sync_activities(db: Session, user: User, limit: int = 50) -> int:
 
         existing = db.scalar(
             select(Activity).where(
-                Activity.user_id == user.id, Activity.garmin_activity_id == gid
+                Activity.user_id == user.id, Activity.source == "garmin", Activity.external_id == gid
             )
         )
-        row = existing or Activity(user_id=user.id, garmin_activity_id=gid)
+        row = existing or Activity(user_id=user.id, source="garmin", external_id=gid)
 
         row.name = act.get("activityName")
         row.activity_type = _dig(act, "activityType", "typeKey")
@@ -117,13 +217,101 @@ def sync_activities(db: Session, user: User, limit: int = 50) -> int:
     return count
 
 
+# --------------------------- zone di frequenza cardiaca ---------------------------
+
+# Il tempo per zona è un endpoint separato: una chiamata per attività. Si
+# scarica solo per le attività che non ce l'hanno ancora, e con un tetto per
+# sync, così la prima sincronizzazione non fa duecento richieste di fila.
+ZONES_PER_SYNC = 25
+
+
+def sync_activity_zones(db: Session, user: User, limit: int = ZONES_PER_SYNC) -> int:
+    """Scarica il tempo trascorso in ogni zona FC per le attività che ne sono prive.
+
+    È il dato che permette di dire com'è distribuita davvero l'intensità: la FC
+    media di un'intera uscita non distingue un fondo lento da un fartlek.
+    """
+    pending = list(db.scalars(
+        select(Activity)
+        .where(
+            Activity.user_id == user.id,
+            Activity.hr_zones_json.is_(None),
+            Activity.avg_hr.isnot(None),
+        )
+        .order_by(Activity.start_time.desc())
+        .limit(limit)
+    ).all())
+    if not pending:
+        return 0
+
+    client = get_client(user)
+    count = 0
+    for activity in pending:
+        try:
+            data = client.get_activity_hr_in_timezones(activity.external_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Zone FC non disponibili per %s: %s",
+                           activity.external_id, exc)
+            continue
+
+        zones, bounds = _parse_hr_zones(data)
+        if zones is None:
+            continue
+        activity.hr_zones_json = zones
+        activity.hr_zone_bounds_json = bounds
+        count += 1
+
+    db.commit()
+    logger.info("Scaricate le zone FC di %d attività.", count)
+    return count
+
+
+def _parse_hr_zones(data: Any) -> tuple[list[float] | None, list[float] | None]:
+    """Secondi per zona **e** i battiti in cui ogni zona comincia.
+
+    Garmin restituisce una voce per zona con `zoneNumber`, `secsInZone` e
+    `zoneLowBoundary`, ma salta le zone in cui non si è passato tempo: qui si
+    riempiono di zero, perché a valle serve sempre un vettore di cinque valori.
+
+    I confini si salvano insieme ai secondi perché arrivano dalla stessa
+    risposta e descrivono **come quei secondi sono stati contati**. L'app fino
+    a qui li ricalcolava per conto suo come percentuali della FC massima,
+    mentre l'orologio può avere le zone tarate su riserva cardiaca o su soglia:
+    il grafico contava secondo una scala e la legenda ne dichiarava un'altra.
+    """
+    if not isinstance(data, list) or not data:
+        return None, None
+
+    zones = [0.0] * 5
+    bounds: list[float | None] = [None] * 5
+    found = False
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        number = _first(entry, "zoneNumber", "zoneNo")
+        seconds = _first(entry, "secsInZone", "secondsInZone")
+        if number is None or seconds is None:
+            continue
+        index = int(number) - 1
+        if 0 <= index < len(zones):
+            zones[index] = float(seconds)
+            low = _first(entry, "zoneLowBoundary", "lowBoundary")
+            if low is not None:
+                bounds[index] = float(low)
+            found = True
+
+    if not found:
+        return None, None
+    return zones, (bounds if any(b is not None for b in bounds) else None)
+
+
 # --------------------------- sonno ---------------------------
 
 def sync_sleep(db: Session, user: User, days: int = 28) -> int:
     client = get_client(user)
     count = 0
 
-    for day in _last_days(days):
+    for day in _days_to_fetch(db, SleepRecord, user, days):
         cdate = day.isoformat()
         try:
             data = client.get_sleep_data(cdate)
@@ -161,7 +349,7 @@ def sync_training(db: Session, user: User, days: int = 28) -> int:
     client = get_client(user)
     count = 0
 
-    for day in _last_days(days):
+    for day in _days_to_fetch(db, TrainingMetric, user, days):
         cdate = day.isoformat()
 
         vo2_run, vo2_bike = _fetch_vo2max(client, cdate)
@@ -243,7 +431,7 @@ def sync_wellness(db: Session, user: User, days: int = 28) -> int:
     client = get_client(user)
     count = 0
 
-    for day in _last_days(days):
+    for day in _days_to_fetch(db, DailyWellness, user, days):
         cdate = day.isoformat()
         try:
             s = client.get_user_summary(cdate)
@@ -287,7 +475,7 @@ def sync_wellness(db: Session, user: User, days: int = 28) -> int:
 
 def sync_body(db: Session, user: User, days: int = 90) -> int:
     client = get_client(user)
-    end = date.today()
+    end = today_for(user)
     start = end - timedelta(days=days)
     try:
         data = client.get_body_composition(start.isoformat(), end.isoformat())
@@ -331,6 +519,7 @@ def sync_all(
     """Esegue tutte le sincronizzazioni per un utente e restituisce i conteggi."""
     return {
         "activities": sync_activities(db, user, activity_limit),
+        "zones": sync_activity_zones(db, user),
         "wellness": sync_wellness(db, user, days),
         "sleep": sync_sleep(db, user, days),
         "training": sync_training(db, user, days),

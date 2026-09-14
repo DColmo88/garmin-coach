@@ -1,0 +1,80 @@
+{% extends "_auth_layout.html" %}
+{% block title %}Registrati · Garmin Coach{% endblock %}
+{% block card_width %}470px{% endblock %}
+{% block subtitle %}Crea il tuo account. I dati di allenamento si collegano dopo.{% endblock %}
+
+{% block form %}
+{% from "_icons.html" import icon %}
+<form method="post" action="/register" autocomplete="on">
+  <div class="field">
+    <label for="display_name">Come ti chiami</label>
+    <input id="display_name" name="display_name" type="text"
+           value="{{ display_name or '' }}" autocomplete="name"
+           placeholder="Davide" autofocus />
+    <small class="field-help">Serve solo perché il coach ti chiami per nome.</small>
+  </div>
+
+  <div class="field">
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" required
+           value="{{ email or '' }}" autocomplete="username"
+           placeholder="tu@esempio.it" />
+  </div>
+
+  <div class="field-pair">
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required
+             autocomplete="new-password" placeholder="••••••••"
+             minlength="{{ min_password }}" />
+    </div>
+    <div class="field">
+      <label for="password_confirm">Ripetila</label>
+      <input id="password_confirm" name="password_confirm" type="password" required
+             autocomplete="new-password" placeholder="••••••••"
+             minlength="{{ min_password }}" />
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="invite_code">Codice invito</label>
+    <input id="invite_code" name="invite_code" type="text" required
+           value="{{ invite_code or '' }}"
+           placeholder="Il codice che hai ricevuto" />
+  </div>
+
+  {#
+    La domanda che si fa una volta sola. Non filtra niente — corse, giri in
+    bici e tutto il resto vengono comunque analizzati — ma decide cosa l'app
+    mette davanti: i primati sulle distanze o quelli su velocità e potenza.
+  #}
+  <fieldset class="sport-choice">
+    <legend>Come ti alleni di più?</legend>
+    <div class="sport-options">
+      {% for key in primary_sports %}
+        {% set s = sports[key] %}
+        <label class="sport-option">
+          <input type="radio" name="primary_sport" value="{{ key }}"
+                 {{ 'checked' if primary_sport == key or (not primary_sport and loop.first) }} />
+          <span class="sport-option-body">
+            {{ icon(s.icon, 26) }}
+            <span class="sport-option-label">{{ s.label }}</span>
+          </span>
+        </label>
+      {% endfor %}
+    </div>
+    <small class="field-help">
+      Puoi cambiarlo quando vuoi. In ogni caso il coach guarda tutto quello che
+      fai, anche gli altri sport.
+    </small>
+  </fieldset>
+
+  <button class="btn primary auth-btn" type="submit">Crea il mio account</button>
+</form>
+{% endblock %}
+
+{% block note %}
+Questa password è <b>dell'app</b>, non del tuo orologio. Subito dopo ti
+chiederemo da dove prendere i dati — <b>Garmin</b> o <b>Strava</b>.<br />
+Hai già un account? <a href="/login">Accedi</a>.
+{% endblock %}

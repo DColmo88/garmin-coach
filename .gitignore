@@ -23,3 +23,8 @@ __pycache__/
 
 # Claude Code local settings
 .claude/
+
+# tooling locale (skill installate)
+.agents/
+skills-lock.json
+.superpowers/
